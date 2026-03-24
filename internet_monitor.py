@@ -46,6 +46,9 @@ INTERVAL: int = 60
 TRIGGER: int = 3
 HIGH_LATENCY_MS: float = 1000.0
 DNS_FAILURE_TRIGGER: int = 3
+MAX_ALERTS_PER_HOUR: int = 0
+LOSS_ALERT_DELAY_SECONDS: int = 300
+LATENCY_ALERT_DELAY_SECONDS: int = 300
 
 LOG_PATH: str = "/var/log/connection.log"
 TIMEZONE: str = "America/Detroit"
@@ -142,6 +145,9 @@ def load_config(path: str) -> None:
     TRIGGER = get_int(section, "trigger", TRIGGER)
     HIGH_LATENCY_MS = get_float(section, "high_latency_ms", HIGH_LATENCY_MS)
     DNS_FAILURE_TRIGGER = get_int(section, "dns_failure_trigger", DNS_FAILURE_TRIGGER)
+    MAX_ALERTS_PER_HOUR = get_int(section, "max_alerts_per_hour", MAX_ALERTS_PER_HOUR)
+    LOSS_ALERT_DELAY_SECONDS = get_int(section, "loss_alert_delay_seconds", LOSS_ALERT_DELAY_SECONDS)
+    LATENCY_ALERT_DELAY_SECONDS = get_int(section, "latency_alert_delay_seconds", LATENCY_ALERT_DELAY_SECONDS)
     LOG_PATH = get_str(section, "log_path", LOG_PATH)
     TIMEZONE = get_str(section, "timezone", TIMEZONE)
 
@@ -432,20 +438,35 @@ class PushoverNotifier:
         user: str,
         device: str = "",
         priority: int = 0,
+        max_alerts_per_hour: int = 0,
         debug: bool = False,
     ) -> None:
         self.token = token.strip()
         self.user = user.strip()
         self.device = device.strip()
         self.priority = priority
+        self.max_alerts_per_hour = max_alerts_per_hour
         self.debug = debug
         self.queue: List[QueuedNotification] = []
+        self.alert_history: List[datetime] = []
         self.enabled: bool = bool(self.token and self.user)
         self._warned_disabled = False
 
         if not self.enabled:
             logf(False, "Pushover is not fully configured (missing token or user); "
                         "notifications will be logged only.")
+
+    def _prune_history(self) -> None:
+        """Drop entries older than one hour from the hourly rate window."""
+        cutoff = utcnow() - timedelta(hours=1)
+        self.alert_history = [t for t in self.alert_history if t > cutoff]
+
+    def _is_rate_limited(self) -> bool:
+        """Return True if max alerts per hour has been reached."""
+        if self.max_alerts_per_hour <= 0:
+            return False
+        self._prune_history()
+        return len(self.alert_history) >= self.max_alerts_per_hour
 
     def _enqueue(self, title: str, message: str) -> None:
         """Add a notification to the local queue for later delivery."""
@@ -511,6 +532,15 @@ class PushoverNotifier:
         Try to send a notification immediately.
         On failure (network down, HTTP error, etc.), queue it for later.
         """
+        if self._is_rate_limited():
+            logf(False, f"Alert rate limit reached ({self.max_alerts_per_hour}/hour); "
+                        f"dropping notification '{title}'.")
+            return
+
+        # Record this intent in history so we respect the per-hour cap.
+        if self.max_alerts_per_hour > 0:
+            self.alert_history.append(utcnow())
+
         if not self.enabled:
             # Still log to file even if Pushover is not configured
             logf(False, f"Pushover disabled; notification '{title}' not sent.")
@@ -560,6 +590,7 @@ def main() -> None:
         user=PUSHOVER_USER,
         device=PUSHOVER_DEVICE,
         priority=PUSHOVER_PRIORITY,
+        max_alerts_per_hour=MAX_ALERTS_PER_HOUR,
         debug=DEBUG,
     )
 
@@ -570,10 +601,12 @@ def main() -> None:
     # Packet loss tracking
     loss_iter_count = 0
     loss_start: Optional[datetime] = None
+    loss_alert_sent = False
 
     # High latency tracking
     latency_iter_count = 0
     latency_start: Optional[datetime] = None
+    latency_alert_sent = False
 
     # DNS tracking
     dns_fail_count = 0
@@ -658,21 +691,32 @@ def main() -> None:
                 if loss_iter_count == 1:
                     loss_start = utcnow()
 
+                loss_duration = (
+                    (utcnow() - loss_start).total_seconds() if loss_start else 0
+                )
+
                 if DEBUG:
                     logf(False, f"Packet loss detected: {loss}% "
-                                f"({loss_iter_count}/{TRIGGER})")
+                                f"({loss_iter_count}/{TRIGGER}), "
+                                f"duration={loss_duration:.1f}s")
 
-                if loss_iter_count == TRIGGER and loss_start is not None:
+                if (
+                    loss_iter_count >= TRIGGER
+                    and loss_start is not None
+                    and loss_duration >= LOSS_ALERT_DELAY_SECONDS
+                    and not loss_alert_sent
+                ):
                     title = "Internet Packet Loss Detected"
                     message = (
                         f"Packet loss of {loss}% detected to {PING_HOST} "
-                        f"for at least {TRIGGER} consecutive checks "
-                        f"since {format_local(loss_start)}."
+                        f"for at least {format_duration(int(loss_duration))} "
+                        f"(threshold {format_duration(LOSS_ALERT_DELAY_SECONDS)})."
                     )
                     notifier.notify(title, message)
                     logf(False, message)
+                    loss_alert_sent = True
             else:
-                if loss_iter_count >= TRIGGER and loss_start is not None:
+                if loss_alert_sent and loss_start is not None:
                     downtime = int((utcnow() - loss_start).total_seconds())
                     title = "Internet Packet Loss Resolved"
                     message = (
@@ -685,6 +729,7 @@ def main() -> None:
 
                 loss_iter_count = 0
                 loss_start = None
+                loss_alert_sent = False
 
             # High latency
             if avg_latency is not None and avg_latency > HIGH_LATENCY_MS:
@@ -692,21 +737,32 @@ def main() -> None:
                 if latency_iter_count == 1:
                     latency_start = utcnow()
 
+                latency_duration = (
+                    (utcnow() - latency_start).total_seconds() if latency_start else 0
+                )
+
                 if DEBUG:
                     logf(False, f"High latency {avg_latency:.2f}ms detected "
-                                f"({latency_iter_count}/{TRIGGER})")
+                                f"({latency_iter_count}/{TRIGGER}), "
+                                f"duration={latency_duration:.1f}s")
 
-                if latency_iter_count == TRIGGER and latency_start is not None:
+                if (
+                    latency_iter_count >= TRIGGER
+                    and latency_start is not None
+                    and latency_duration >= LATENCY_ALERT_DELAY_SECONDS
+                    and not latency_alert_sent
+                ):
                     title = "High Internet Latency Detected"
                     message = (
                         f"High latency detected: average {avg_latency:.2f} ms to {PING_HOST} "
-                        f"for at least {TRIGGER} consecutive checks "
-                        f"since {format_local(latency_start)}."
+                        f"for at least {format_duration(int(latency_duration))} "
+                        f"(threshold {format_duration(LATENCY_ALERT_DELAY_SECONDS)})."
                     )
                     notifier.notify(title, message)
                     logf(False, message)
+                    latency_alert_sent = True
             else:
-                if latency_iter_count >= TRIGGER and latency_start is not None:
+                if latency_alert_sent and latency_start is not None:
                     downtime = int((utcnow() - latency_start).total_seconds())
                     title = "Internet Latency Recovered"
                     message = (
@@ -719,6 +775,7 @@ def main() -> None:
 
                 latency_iter_count = 0
                 latency_start = None
+                latency_alert_sent = False
 
         # --------------------
         # DNS HEALTH (only check if connectivity_up)
