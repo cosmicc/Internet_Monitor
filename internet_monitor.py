@@ -49,6 +49,7 @@ DNS_FAILURE_TRIGGER: int = 3
 MAX_ALERTS_PER_HOUR: int = 0
 LOSS_ALERT_DELAY_SECONDS: int = 300
 LATENCY_ALERT_DELAY_SECONDS: int = 300
+OUTAGE_ALERT_DELAY_SECONDS: int = 300
 
 LOG_PATH: str = "/var/log/connection.log"
 TIMEZONE: str = "America/Detroit"
@@ -99,7 +100,8 @@ def load_config(path: str) -> None:
     """
     global DEBUG, PING_HOST, DNS_HOST, PINGS, INTERVAL, TRIGGER
     global HIGH_LATENCY_MS, DNS_FAILURE_TRIGGER, MAX_ALERTS_PER_HOUR
-    global LOSS_ALERT_DELAY_SECONDS, LATENCY_ALERT_DELAY_SECONDS, LOG_PATH, TIMEZONE
+    global LOSS_ALERT_DELAY_SECONDS, LATENCY_ALERT_DELAY_SECONDS, OUTAGE_ALERT_DELAY_SECONDS
+    global LOG_PATH, TIMEZONE
     global PUSHOVER_TOKEN, PUSHOVER_USER, PUSHOVER_DEVICE, PUSHOVER_PRIORITY
     global LOCAL_TZ, STATUS_PATH
 
@@ -149,6 +151,7 @@ def load_config(path: str) -> None:
     MAX_ALERTS_PER_HOUR = get_int(section, "max_alerts_per_hour", MAX_ALERTS_PER_HOUR)
     LOSS_ALERT_DELAY_SECONDS = get_int(section, "loss_alert_delay_seconds", LOSS_ALERT_DELAY_SECONDS)
     LATENCY_ALERT_DELAY_SECONDS = get_int(section, "latency_alert_delay_seconds", LATENCY_ALERT_DELAY_SECONDS)
+    OUTAGE_ALERT_DELAY_SECONDS = get_int(section, "outage_alert_delay_seconds", OUTAGE_ALERT_DELAY_SECONDS)
     LOG_PATH = get_str(section, "log_path", LOG_PATH)
     TIMEZONE = get_str(section, "timezone", TIMEZONE)
 
@@ -598,6 +601,7 @@ def main() -> None:
     # Outage tracking
     ping_fail_count = 0
     outage_start: Optional[datetime] = None
+    outage_alert_sent = False
 
     # Packet loss tracking
     loss_iter_count = 0
@@ -650,7 +654,7 @@ def main() -> None:
         connectivity_up = ping_result.success
 
         if connectivity_up:
-            if ping_fail_count >= TRIGGER and outage_start is not None:
+            if ping_fail_count >= TRIGGER and outage_start is not None and outage_alert_sent:
                 downtime = int((utcnow() - outage_start).total_seconds())
                 title = "Internet Outage Resolved"
                 message = (
@@ -662,6 +666,7 @@ def main() -> None:
 
             ping_fail_count = 0
             outage_start = None
+            outage_alert_sent = False
         else:
             ping_fail_count += 1
             if DEBUG:
@@ -670,14 +675,27 @@ def main() -> None:
             if ping_fail_count == 1:
                 outage_start = utcnow()
 
-            if ping_fail_count == TRIGGER and outage_start is not None:
+            outage_duration = (
+                (utcnow() - outage_start).total_seconds() if outage_start else 0
+            )
+
+            logf(False, f"Ping check failed ({ping_fail_count}/{TRIGGER}), "
+                        f"duration={outage_duration:.1f}s")
+
+            if (
+                ping_fail_count >= TRIGGER
+                and outage_start is not None
+                and outage_duration >= OUTAGE_ALERT_DELAY_SECONDS
+                and not outage_alert_sent
+            ):
                 title = "Internet Outage Detected"
                 message = (
-                    f"Ping to {PING_HOST} has failed {TRIGGER} consecutive checks "
-                    f"since {format_local(outage_start)}."
+                    f"Internet outage present for at least {format_duration(int(outage_duration))} "
+                    f"(threshold {format_duration(OUTAGE_ALERT_DELAY_SECONDS)})."
                 )
                 notifier.notify(title, message)
                 logf(False, message)
+                outage_alert_sent = True
 
         # --------------------
         # PACKET LOSS & LATENCY (only meaningful when connectivity_up)
@@ -695,6 +713,10 @@ def main() -> None:
                 loss_duration = (
                     (utcnow() - loss_start).total_seconds() if loss_start else 0
                 )
+
+                # Always record loss events to log (regardless of 300s alert delay)
+                logf(False, f"Packet loss {loss}% to {PING_HOST} (count {loss_iter_count}) "
+                            f"duration {loss_duration:.1f}s")
 
                 if DEBUG:
                     logf(False, f"Packet loss detected: {loss}% "
@@ -741,6 +763,10 @@ def main() -> None:
                 latency_duration = (
                     (utcnow() - latency_start).total_seconds() if latency_start else 0
                 )
+
+                # Always record latency events to log (regardless of 300s alert delay)
+                logf(False, f"High latency {avg_latency:.2f}ms to {PING_HOST} "
+                            f"(count {latency_iter_count}) duration {latency_duration:.1f}s")
 
                 if DEBUG:
                     logf(False, f"High latency {avg_latency:.2f}ms detected "
