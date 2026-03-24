@@ -236,7 +236,7 @@ def logf(ok: bool, message: str) -> None:
     - Only falls back to stderr if directory or file creation fails.
     """
     status_char = "(+)" if ok else "(-)"
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    ts = datetime.now(tz=pytz.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = f"{ts} {status_char} {message}\n"
 
     log_dir = os.path.dirname(LOG_PATH) or "/"
