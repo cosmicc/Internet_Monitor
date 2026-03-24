@@ -175,15 +175,38 @@ def load_status() -> tuple[Dict[str, str], Dict[str, str]]:
         return _format_status("unknown"), _format_status("unknown")
 
     ts_str = data.get("timestamp", "")
-    if not _status_is_fresh(ts_str):
-        # Too old to trust
-        return _format_status("unknown"), _format_status("unknown")
+    stale = not _status_is_fresh(ts_str)
 
     internet_state = "unknown"
     dns_state = "unknown"
 
     internet = data.get("internet")
     dns = data.get("dns")
+
+    if isinstance(internet, dict):
+        internet_state = internet.get("state", "unknown")
+    if isinstance(dns, dict):
+        dns_state = dns.get("state", "unknown")
+
+    if stale:
+        # Keep last known state when stale data is present
+        # so the UI does not show 'unknown' unless truly missing.
+        if internet_state not in ("up", "down", "warning"):
+            internet_state = "unknown"
+        if dns_state not in ("up", "down", "warning"):
+            dns_state = "unknown"
+
+        # You can tune staleness behavior with [web].status_max_age.
+        log_msg = (
+            f"Status at {ts_str} is stale (age > {STATUS_MAX_AGE}s); "
+            f"keeping last known states: internet={internet_state}, dns={dns_state}"
+        )
+        # No logging util imported here; writing to stdout for visibility.
+        print(log_msg)
+
+        return _format_status(internet_state), _format_status(dns_state)
+
+    return _format_status(internet_state), _format_status(dns_state)
 
     if isinstance(internet, dict):
         internet_state = internet.get("state", "unknown")
