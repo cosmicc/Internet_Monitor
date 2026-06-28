@@ -3,11 +3,6 @@
 Dockerized Python monitor for internet reachability, packet loss, latency, DNS
 health, a small Flask log dashboard, and optional Pushover alerts.
 
-## Deployment
-
-Deploy this repository as a Docker stack, such as a Portainer stack, using
-`docker-compose.yml`. Open `http://<docker-host>:5005` after deployment.
-
 ## Configuration
 
 All runtime configuration is set with Docker environment variables. Start from
@@ -23,7 +18,27 @@ or packet-loss alerts.
 Runtime log and status files are stored in the Docker volume mounted at `/data`.
 The Docker stack serves the dashboard with Gunicorn.
 
-More deployment notes are in [INSTALL.md](INSTALL.md).
+For deployment steps, see [INSTALL.md](INSTALL.md).
+
+## Web Interface
+
+The web interface is available on the configured web port, `5005` by default. It
+shows current Internet and DNS status, auto-refreshes with the monitor interval,
+displays the most recent connection log lines, and includes a clear-log action.
+
+Use `INTERNET_MONITOR_WEB_ALLOWED_HOSTS` to restrict direct client IPs. Leave it
+blank to allow all clients that can reach the published Docker port.
+
+## Pushover Alerts
+
+Pushover notifications are optional and disabled until both
+`INTERNET_MONITOR_PUSHOVER_TOKEN` and `INTERNET_MONITOR_PUSHOVER_USER` are set in
+the stack environment. Optional settings include
+`INTERNET_MONITOR_PUSHOVER_DEVICE` and `INTERNET_MONITOR_PUSHOVER_PRIORITY`.
+
+Alerts cover outages, packet loss, high latency, DNS failures, and recovery
+events. Notifications that cannot be sent while connectivity is down are queued
+and retried after the monitor sees the connection recover.
 
 ## Development
 

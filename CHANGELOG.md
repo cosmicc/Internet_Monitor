@@ -21,6 +21,9 @@
 - Switched the container web process from Flask's development server to Gunicorn.
 - Optimized dashboard log tail reads to avoid loading the entire log file.
 - Made monitor status writes atomic so the dashboard does not read partial JSON.
+- Expanded README documentation for the web interface and Pushover integration.
+- Moved install steps out of README and expanded INSTALL.md with command-line
+  Docker Compose deployment instructions.
 
 ### Removed
 
