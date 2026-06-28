@@ -7,10 +7,12 @@ Internet health monitor with:
 - DNS resolution checks
 - Pushover notifications, queued while the internet is down
 - Logging to a configurable log file (created if missing)
-- Config-driven thresholds and targets via config.ini
+- Environment-driven thresholds and targets
 
 Intended to be run as a long-lived process (systemd, docker, tmux, etc.).
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -18,165 +20,85 @@ import re
 import socket
 import subprocess
 import time
-import json  # NEW: for status file JSON
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 
 import pytz
-import configparser
 import requests
 
+from .settings import Settings, load_settings
 
-# ======================================
-# DEFAULTS & GLOBAL CONFIG OVERRIDES
-# ======================================
 
-# Path to config file (can be overridden via env)
-CONFIG_PATH = os.environ.get("INTERNET_MONITOR_CONFIG", "/config/config.ini")
-
-# Defaults (overridden by config.ini if present)
+# Defaults are overwritten from environment variables at startup.
 DEBUG: bool = False
 
-PING_HOST: str = "8.8.8.8"
+PING_HOST: str = "1.1.1.1"
+BACKUP_PING_HOST: str = "8.8.8.8"
 DNS_HOST: str = "www.google.com"
 
 PINGS: int = 5
-INTERVAL: int = 60
+PING_PERIOD_MS: int = 1000
+PING_TIMEOUT_MS: int = 1000
+INTERVAL: int = 10
 TRIGGER: int = 3
 HIGH_LATENCY_MS: float = 1000.0
 DNS_FAILURE_TRIGGER: int = 3
-MAX_ALERTS_PER_HOUR: int = 0
+MAX_ALERTS_PER_HOUR: int = 5
 LOSS_ALERT_DELAY_SECONDS: int = 300
 LATENCY_ALERT_DELAY_SECONDS: int = 300
 OUTAGE_ALERT_DELAY_SECONDS: int = 300
 
-LOG_PATH: str = "/var/log/connection.log"
+LOG_PATH: str = "/data/connection.log"
+STATUS_PATH: str = "/data/connection_status.json"
 TIMEZONE: str = "America/Detroit"
 
-# Status file for web UI (final value set in load_config)
-STATUS_PATH: str = ""
-
-# Pushover defaults (token/user MUST be overridden in config for notifications to work)
 PUSHOVER_TOKEN: str = ""
 PUSHOVER_USER: str = ""
-PUSHOVER_DEVICE: str = ""          # optional
-PUSHOVER_PRIORITY: int = 0         # default priority 0
+PUSHOVER_DEVICE: str = ""
+PUSHOVER_PRIORITY: int = 0
 
-# Will be set from TIMEZONE at runtime
 LOCAL_TZ = pytz.timezone(TIMEZONE)
 
 
-# ======================================
-# CONFIG LOADING
-# ======================================
-
-def load_config(path: str) -> None:
-    """
-    Load configuration from an INI file and override globals.
-
-    Example:
-
-        [monitor]
-        debug = false
-        ping_host = 8.8.8.8
-        dns_host = www.google.com
-        pings = 5
-        interval = 60
-        trigger = 3
-        high_latency_ms = 1000
-        dns_failure_trigger = 3
-        log_path = /var/log/connection.log
-        timezone = America/Detroit
-
-        [pushover]
-        token = YOUR_APP_TOKEN
-        user = YOUR_USER_KEY
-        device =                      ; optional (empty = all devices)
-        priority = 0                  ; optional, default 0
-
-        [web]
-        status_path = /var/log/connection_status.json   ; optional
-    """
-    global DEBUG, PING_HOST, DNS_HOST, PINGS, INTERVAL, TRIGGER
+def apply_settings(settings: Settings) -> None:
+    """Apply environment-backed settings to monitor module globals."""
+    global DEBUG, PING_HOST, BACKUP_PING_HOST, DNS_HOST, PINGS, PING_PERIOD_MS
+    global PING_TIMEOUT_MS, INTERVAL, TRIGGER
     global HIGH_LATENCY_MS, DNS_FAILURE_TRIGGER, MAX_ALERTS_PER_HOUR
     global LOSS_ALERT_DELAY_SECONDS, LATENCY_ALERT_DELAY_SECONDS, OUTAGE_ALERT_DELAY_SECONDS
     global LOG_PATH, TIMEZONE
     global PUSHOVER_TOKEN, PUSHOVER_USER, PUSHOVER_DEVICE, PUSHOVER_PRIORITY
     global LOCAL_TZ, STATUS_PATH
 
-    parser = configparser.ConfigParser()
-    read_files = parser.read(path)
+    monitor = settings.monitor
+    pushover = settings.pushover
 
-    if not read_files:
-        print(f"WARNING: config file {path} not found, using built-in defaults.",
-              file=sys.stderr)
-        # LOG_PATH and TIMEZONE remain defaults; derive STATUS_PATH from LOG_PATH
-        default_status_path = os.path.join(os.path.dirname(LOG_PATH) or "/", "connection_status.json")
-        STATUS_PATH = default_status_path
-        LOCAL_TZ = pytz.timezone(TIMEZONE)
-        return
+    DEBUG = monitor.debug
+    PING_HOST = monitor.ping_host
+    BACKUP_PING_HOST = monitor.backup_ping_host
+    DNS_HOST = monitor.dns_host
+    PINGS = monitor.pings
+    PING_PERIOD_MS = monitor.ping_period_ms
+    PING_TIMEOUT_MS = monitor.ping_timeout_ms
+    INTERVAL = monitor.interval
+    TRIGGER = monitor.trigger
+    HIGH_LATENCY_MS = monitor.high_latency_ms
+    DNS_FAILURE_TRIGGER = monitor.dns_failure_trigger
+    MAX_ALERTS_PER_HOUR = monitor.max_alerts_per_hour
+    LOSS_ALERT_DELAY_SECONDS = monitor.loss_alert_delay_seconds
+    LATENCY_ALERT_DELAY_SECONDS = monitor.latency_alert_delay_seconds
+    OUTAGE_ALERT_DELAY_SECONDS = monitor.outage_alert_delay_seconds
+    LOG_PATH = monitor.log_path
+    STATUS_PATH = monitor.status_path
+    TIMEZONE = monitor.timezone
 
-    # Helper accessors
-    def get_bool(section: str, option: str, default: bool) -> bool:
-        if parser.has_option(section, option):
-            return parser.getboolean(section, option)
-        return default
-
-    def get_int(section: str, option: str, default: int) -> int:
-        if parser.has_option(section, option):
-            return parser.getint(section, option)
-        return default
-
-    def get_float(section: str, option: str, default: float) -> float:
-        if parser.has_option(section, option):
-            return parser.getfloat(section, option)
-        return default
-
-    def get_str(section: str, option: str, default: str) -> str:
-        if parser.has_option(section, option):
-            return parser.get(section, option)
-        return default
-
-    # [monitor]
-    section = "monitor"
-    DEBUG = get_bool(section, "debug", DEBUG)
-    PING_HOST = get_str(section, "ping_host", PING_HOST)
-    DNS_HOST = get_str(section, "dns_host", DNS_HOST)
-    PINGS = get_int(section, "pings", PINGS)
-    INTERVAL = get_int(section, "interval", INTERVAL)
-    TRIGGER = get_int(section, "trigger", TRIGGER)
-    HIGH_LATENCY_MS = get_float(section, "high_latency_ms", HIGH_LATENCY_MS)
-    DNS_FAILURE_TRIGGER = get_int(section, "dns_failure_trigger", DNS_FAILURE_TRIGGER)
-    MAX_ALERTS_PER_HOUR = get_int(section, "max_alerts_per_hour", MAX_ALERTS_PER_HOUR)
-    LOSS_ALERT_DELAY_SECONDS = get_int(section, "loss_alert_delay_seconds", LOSS_ALERT_DELAY_SECONDS)
-    LATENCY_ALERT_DELAY_SECONDS = get_int(section, "latency_alert_delay_seconds", LATENCY_ALERT_DELAY_SECONDS)
-    OUTAGE_ALERT_DELAY_SECONDS = get_int(section, "outage_alert_delay_seconds", OUTAGE_ALERT_DELAY_SECONDS)
-    LOG_PATH = get_str(section, "log_path", LOG_PATH)
-    TIMEZONE = get_str(section, "timezone", TIMEZONE)
-
-    # [pushover]
-    section = "pushover"
-    PUSHOVER_TOKEN = get_str(section, "token", PUSHOVER_TOKEN)
-    PUSHOVER_USER = get_str(section, "user", PUSHOVER_USER)
-    PUSHOVER_DEVICE = get_str(section, "device", PUSHOVER_DEVICE)
-    PUSHOVER_PRIORITY = get_int(section, "priority", PUSHOVER_PRIORITY)
-
-    # Status file path: look in [web] if present, else default next to LOG_PATH
-    default_status_path = os.path.join(os.path.dirname(LOG_PATH) or "/", "connection_status.json")
-    if parser.has_section("web"):
-        section = "web"
-        STATUS_PATH = get_str(section, "status_path", default_status_path)
-    else:
-        STATUS_PATH = default_status_path
-
-    # Update timezone object
-    try:
-        LOCAL_TZ = pytz.timezone(TIMEZONE)
-    except Exception as e:
-        print(f"WARNING: invalid timezone '{TIMEZONE}' in config: {e}. "
-              f"Falling back to UTC.", file=sys.stderr)
-        LOCAL_TZ = pytz.utc
+    PUSHOVER_TOKEN = pushover.token
+    PUSHOVER_USER = pushover.user
+    PUSHOVER_DEVICE = pushover.device
+    PUSHOVER_PRIORITY = pushover.priority
+    LOCAL_TZ = pytz.timezone(TIMEZONE)
 
 
 # ======================================
@@ -282,12 +204,18 @@ def write_status(internet_state: str, dns_state: str) -> None:
     }
 
     status_dir = os.path.dirname(STATUS_PATH) or "/"
+    temp_path = f"{STATUS_PATH}.tmp.{os.getpid()}"
     try:
         os.makedirs(status_dir, exist_ok=True)
-        with open(STATUS_PATH, "w", encoding="utf-8") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
+        os.replace(temp_path, STATUS_PATH)
     except Exception as e:
         logf(False, f"Failed to write status file '{STATUS_PATH}': {e}")
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def check_dns(hostname: str) -> bool:
@@ -313,7 +241,9 @@ class PingResult:
     avg_latency_ms: Optional[float]
     loss_percent: Optional[int]
     raw_output: str
+    host: str = ""
     error: Optional[str] = None
+    used_backup: bool = False
 
 
 def parse_fping_output(stderr_output: str) -> Tuple[Optional[float], Optional[int]]:
@@ -349,33 +279,30 @@ def parse_fping_output(stderr_output: str) -> Tuple[Optional[float], Optional[in
     return avg_latency, loss_percent
 
 
-def run_ping() -> PingResult:
+def _run_single_ping(host: str) -> PingResult:
     """
-    Run fping against PING_HOST with PINGS probes.
-    Returns a PingResult with success flag, avg latency, packet loss, and raw output.
+    Run fping against one host with production-safe timing.
 
-    success=True means:
-        - fping exited with code 0 (host reachable)
-        - Not necessarily "healthy" (high latency/packet loss still possible)
+    Explicit period and timeout settings avoid fping's short default packet
+    spacing behavior in containerized deployments.
     """
-    cmd = ["fping", "-c", str(PINGS), PING_HOST]
+    cmd = [
+        "fping",
+        "-c",
+        str(PINGS),
+        "-p",
+        str(PING_PERIOD_MS),
+        "-t",
+        str(PING_TIMEOUT_MS),
+        host,
+    ]
 
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            check=True,
-        )
-        avg_latency, loss = parse_fping_output(proc.stderr)
-        if DEBUG:
-            logf(True, f"fping success: avg_latency={avg_latency}ms, loss={loss}%")
-        return PingResult(
-            success=True,
-            avg_latency_ms=avg_latency,
-            loss_percent=loss,
-            raw_output=proc.stderr,
-            error=None,
+            check=False,
         )
     except FileNotFoundError as e:
         msg = f"fping not found: {e}"
@@ -385,31 +312,119 @@ def run_ping() -> PingResult:
             avg_latency_ms=None,
             loss_percent=None,
             raw_output="",
-            error=msg,
-        )
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr or ""
-        avg_latency, loss = parse_fping_output(stderr)
-        msg = f"fping failed with code {e.returncode}"
-        if DEBUG:
-            logf(False, f"{msg}. Output: {stderr.strip()}")
-        return PingResult(
-            success=False,
-            avg_latency_ms=avg_latency,
-            loss_percent=loss,
-            raw_output=stderr,
+            host=host,
             error=msg,
         )
     except Exception as e:
-        msg = f"Unexpected error running fping: {e}"
+        msg = f"Unexpected error running fping for {host}: {e}"
         logf(False, msg)
         return PingResult(
             success=False,
             avg_latency_ms=None,
             loss_percent=None,
             raw_output="",
+            host=host,
             error=msg,
         )
+
+    output = "\n".join(part for part in (proc.stdout, proc.stderr) if part)
+    avg_latency, loss = parse_fping_output(output)
+    success = proc.returncode == 0
+
+    if DEBUG:
+        level_ok = success and (loss in (None, 0))
+        logf(
+            level_ok,
+            f"fping {host}: returncode={proc.returncode}, "
+            f"avg_latency={avg_latency}ms, loss={loss}%",
+        )
+
+    return PingResult(
+        success=success,
+        avg_latency_ms=avg_latency,
+        loss_percent=loss,
+        raw_output=output,
+        host=host,
+        error=None if success else f"fping failed with code {proc.returncode}",
+    )
+
+
+def _ping_result_is_clean(result: PingResult) -> bool:
+    """Return True when a ping result has no loss and acceptable latency."""
+    if not result.success:
+        return False
+    if result.loss_percent not in (None, 0):
+        return False
+    if result.avg_latency_ms is None:
+        return True
+    return result.avg_latency_ms <= HIGH_LATENCY_MS
+
+
+def _ping_result_score(result: PingResult) -> tuple[int, int, float]:
+    """Sort key where lower values mean a healthier ping result."""
+    if not result.success:
+        return (1, 100, float("inf"))
+    loss = result.loss_percent if result.loss_percent is not None else 0
+    latency = result.avg_latency_ms if result.avg_latency_ms is not None else 0.0
+    return (0, loss, latency)
+
+
+def _backup_host_enabled() -> bool:
+    """Return True when a distinct backup ping host is configured."""
+    return bool(BACKUP_PING_HOST and BACKUP_PING_HOST != PING_HOST)
+
+
+def run_ping() -> PingResult:
+    """
+    Run fping against the primary host and, when needed, a backup host.
+
+    Returns a PingResult with success flag, avg latency, packet loss, and raw output.
+
+    success=True means:
+        - at least one configured ping host is reachable
+        - not necessarily "healthy" (high latency/packet loss still possible)
+    """
+    primary = _run_single_ping(PING_HOST)
+    if primary.error and "fping not found" in primary.error:
+        return primary
+
+    if _ping_result_is_clean(primary) or not _backup_host_enabled():
+        return primary
+
+    backup = _run_single_ping(BACKUP_PING_HOST)
+    backup.used_backup = True
+
+    if _ping_result_is_clean(backup):
+        if DEBUG:
+            logf(
+                True,
+                f"Primary ping host {PING_HOST} was not clean; "
+                f"backup host {BACKUP_PING_HOST} is healthy.",
+            )
+        return backup
+
+    if backup.success:
+        better = min((primary, backup), key=_ping_result_score)
+        better.used_backup = better.host == BACKUP_PING_HOST
+        return better
+
+    if not primary.success:
+        return PingResult(
+            success=False,
+            avg_latency_ms=None,
+            loss_percent=max(
+                value for value in (primary.loss_percent, backup.loss_percent, 100)
+                if value is not None
+            ),
+            raw_output=f"primary:\n{primary.raw_output}\nbackup:\n{backup.raw_output}",
+            host=f"{PING_HOST}, {BACKUP_PING_HOST}",
+            error=(
+                f"primary ping host {PING_HOST} and backup ping host "
+                f"{BACKUP_PING_HOST} failed"
+            ),
+        )
+
+    return primary
 
 
 # ======================================
@@ -429,7 +444,7 @@ class PushoverNotifier:
     Pushover notification helper with:
 
     - Direct HTTP API calls using requests
-    - Credentials taken from config.ini (token + user[, device, priority])
+    - Credentials taken from environment variables
     - Automatic queueing if sends fail
     - Retry of queued notifications when connectivity is restored
     """
@@ -563,7 +578,7 @@ class PushoverNotifier:
 
         remaining: List[QueuedNotification] = []
 
-        for notif in self.queue:
+        for index, notif in enumerate(self.queue):
             if self._send_http(notif.title, notif.message):
                 if self.debug:
                     age = int((utcnow() - notif.queued_at).total_seconds())
@@ -575,7 +590,7 @@ class PushoverNotifier:
                 continue
 
             # Sending failed again; keep this and everything after it
-            remaining.append(notif)
+            remaining = self.queue[index:]
             break
 
         self.queue = remaining
@@ -586,8 +601,8 @@ class PushoverNotifier:
 # ======================================
 
 def main() -> None:
-    # Load config and override globals
-    load_config(CONFIG_PATH)
+    """Run the internet monitor loop until interrupted or a fatal error occurs."""
+    apply_settings(load_settings())
 
     notifier = PushoverNotifier(
         token=PUSHOVER_TOKEN,
@@ -621,7 +636,9 @@ def main() -> None:
         startup_msg = (
             f"Starting Internet Monitor in DEBUG mode: "
             f"interval={INTERVAL}s, trigger={TRIGGER}, pings={PINGS}, "
-            f"ping_host={PING_HOST}, dns_host={DNS_HOST}"
+            f"ping_host={PING_HOST}, backup_ping_host={BACKUP_PING_HOST or 'disabled'}, "
+            f"ping_period_ms={PING_PERIOD_MS}, ping_timeout_ms={PING_TIMEOUT_MS}, "
+            f"dns_host={DNS_HOST}"
         )
     else:
         startup_msg = "Starting Internet Monitor"
@@ -640,6 +657,7 @@ def main() -> None:
                 avg_latency_ms=None,
                 loss_percent=None,
                 raw_output="",
+                host=PING_HOST,
                 error=str(e),
             )
 
@@ -670,7 +688,11 @@ def main() -> None:
         else:
             ping_fail_count += 1
             if DEBUG:
-                logf(False, f"Missed ping to {PING_HOST} ({ping_fail_count}/{TRIGGER})")
+                logf(
+                    False,
+                    f"Missed ping to {ping_result.host or PING_HOST} "
+                    f"({ping_fail_count}/{TRIGGER})",
+                )
 
             if ping_fail_count == 1:
                 outage_start = utcnow()
@@ -679,8 +701,11 @@ def main() -> None:
                 (utcnow() - outage_start).total_seconds() if outage_start else 0
             )
 
-            logf(False, f"Ping check failed ({ping_fail_count}/{TRIGGER}), "
-                        f"duration={outage_duration:.1f}s")
+            logf(
+                False,
+                f"Ping check failed for {ping_result.host or PING_HOST} "
+                f"({ping_fail_count}/{TRIGGER}), duration={outage_duration:.1f}s",
+            )
 
             if (
                 ping_fail_count >= TRIGGER
@@ -703,6 +728,7 @@ def main() -> None:
         if connectivity_up and ping_result.loss_percent is not None:
             loss = ping_result.loss_percent
             avg_latency = ping_result.avg_latency_ms
+            ping_host = ping_result.host or PING_HOST
 
             # Packet loss
             if loss > 0:
@@ -715,7 +741,7 @@ def main() -> None:
                 )
 
                 # Always record loss events to log (regardless of 300s alert delay)
-                logf(False, f"Packet loss {loss}% to {PING_HOST} (count {loss_iter_count}) "
+                logf(False, f"Packet loss {loss}% to {ping_host} (count {loss_iter_count}) "
                             f"duration {loss_duration:.1f}s")
 
                 if DEBUG:
@@ -731,7 +757,7 @@ def main() -> None:
                 ):
                     title = "Internet Packet Loss Detected"
                     message = (
-                        f"Packet loss of {loss}% detected to {PING_HOST} "
+                        f"Packet loss of {loss}% detected to {ping_host} "
                         f"for at least {format_duration(int(loss_duration))} "
                         f"(threshold {format_duration(LOSS_ALERT_DELAY_SECONDS)})."
                     )
@@ -743,7 +769,7 @@ def main() -> None:
                     downtime = int((utcnow() - loss_start).total_seconds())
                     title = "Internet Packet Loss Resolved"
                     message = (
-                        f"Packet loss has recovered to 0% (host: {PING_HOST}). "
+                        f"Packet loss has recovered to 0% (host: {ping_host}). "
                         f"Loss period started at {format_local(loss_start)} and "
                         f"lasted {format_duration(downtime)}."
                     )
@@ -765,7 +791,7 @@ def main() -> None:
                 )
 
                 # Always record latency events to log (regardless of 300s alert delay)
-                logf(False, f"High latency {avg_latency:.2f}ms to {PING_HOST} "
+                logf(False, f"High latency {avg_latency:.2f}ms to {ping_host} "
                             f"(count {latency_iter_count}) duration {latency_duration:.1f}s")
 
                 if DEBUG:
@@ -781,7 +807,7 @@ def main() -> None:
                 ):
                     title = "High Internet Latency Detected"
                     message = (
-                        f"High latency detected: average {avg_latency:.2f} ms to {PING_HOST} "
+                        f"High latency detected: average {avg_latency:.2f} ms to {ping_host} "
                         f"for at least {format_duration(int(latency_duration))} "
                         f"(threshold {format_duration(LATENCY_ALERT_DELAY_SECONDS)})."
                     )
@@ -794,7 +820,7 @@ def main() -> None:
                     title = "Internet Latency Recovered"
                     message = (
                         f"Latency has recovered below {HIGH_LATENCY_MS:.0f} ms "
-                        f"(host: {PING_HOST}). High-latency period started at "
+                        f"(host: {ping_host}). High-latency period started at "
                         f"{format_local(latency_start)} and lasted {format_duration(downtime)}."
                     )
                     notifier.notify(title, message)

@@ -1,10 +1,36 @@
 #!/bin/sh
 set -eu
 
-echo "[entrypoint] Using config: ${INTERNET_MONITOR_CONFIG:-/config/config.ini}"
+echo "[entrypoint] Starting Internet Monitor with environment configuration"
 
-# Start the internet monitor in the background
-python -u /app/internet_monitor.py &
+python -u -m internet_monitor.monitor &
+monitor_pid="$!"
 
-# Start the Flask log viewer (0.0.0.0:5005 as coded in log_viewer.py)
-python -u /app/log_viewer.py
+gunicorn \
+  --bind "0.0.0.0:${INTERNET_MONITOR_WEB_PORT:-5005}" \
+  --workers "${INTERNET_MONITOR_WEB_WORKERS:-1}" \
+  --threads "${INTERNET_MONITOR_WEB_THREADS:-2}" \
+  --access-logfile - \
+  --error-logfile - \
+  "internet_monitor.web:create_app()" &
+web_pid="$!"
+
+stop_children() {
+  kill "$monitor_pid" "$web_pid" 2>/dev/null || true
+}
+
+trap stop_children INT TERM
+
+while true; do
+  if ! kill -0 "$monitor_pid" 2>/dev/null; then
+    wait "$monitor_pid"
+    exit "$?"
+  fi
+
+  if ! kill -0 "$web_pid" 2>/dev/null; then
+    wait "$web_pid"
+    exit "$?"
+  fi
+
+  sleep 5
+done

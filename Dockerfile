@@ -1,42 +1,34 @@
 FROM python:3.12-slim
 
-# Install system dependencies: fping for ICMP, ca-certificates for HTTPS
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    FLASK_ENV=production
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        fping \
-        ca-certificates && \
+        ca-certificates \
+        fping && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Python deps
-RUN pip install --no-cache-dir \
-    flask \
-    pytz \
-    requests
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Application files
-COPY internet_monitor.py /app/internet_monitor.py
-COPY log_viewer.py       /app/log_viewer.py
-COPY healthcheck.py      /app/healthcheck.py
-COPY templates/          /app/templates/
-COPY entrypoint.sh       /entrypoint.sh
+COPY internet_monitor/ /app/internet_monitor/
+COPY entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh
+RUN groupadd --system internetmonitor && \
+    useradd --system --gid internetmonitor --home-dir /app --shell /usr/sbin/nologin internetmonitor && \
+    mkdir -p /data && \
+    chown -R internetmonitor:internetmonitor /app /data && \
+    chmod +x /entrypoint.sh
 
-# Make sure these dirs exist *inside* the container
-RUN mkdir -p /var/log && mkdir -p /config/internet_monitor
+USER internetmonitor
 
-# Config path inside the container
-ENV INTERNET_MONITOR_CONFIG=/config/internet_monitor/config.ini
-ENV PYTHONUNBUFFERED=1
-ENV FLASK_ENV=production
-
-# Default web port (actual port still comes from [web].port in config.ini)
 EXPOSE 5005
 
-# Healthcheck uses healthcheck.py, which reads INTERNET_MONITOR_CONFIG
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -u /app/healthcheck.py || exit 1
+  CMD python -m internet_monitor.healthcheck || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
