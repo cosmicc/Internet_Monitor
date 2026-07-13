@@ -13,6 +13,7 @@ import pytz
 
 
 DEFAULT_STATUS_PATH = "/tmp/internet-monitor/status.json"
+DEFAULT_HISTORY_PATH = "/tmp/internet-monitor/history.json"
 MAX_SECRET_BYTES = 4096
 
 
@@ -46,6 +47,9 @@ class MonitorSettings:
     latency_alert_delay_seconds: int = 300
     outage_alert_delay_seconds: int = 300
     status_path: str = DEFAULT_STATUS_PATH
+    history_path: str = DEFAULT_HISTORY_PATH
+    history_detailed_hours: int = 24
+    history_minute_days: int = 30
     timezone: str = "America/Detroit"
 
 
@@ -59,6 +63,8 @@ class WebSettings:
     threads: int = 2
     allowed_hosts: tuple[str, ...] = ()
     status_path: str = DEFAULT_STATUS_PATH
+    history_path: str = DEFAULT_HISTORY_PATH
+    history_max_points: int = 720
     status_max_age: int = 300
     refresh_interval: int = 10
 
@@ -271,6 +277,14 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     status_path = _env_required_str(
         source, "INTERNET_MONITOR_STATUS_PATH", DEFAULT_STATUS_PATH
     )
+    history_path = _env_required_str(
+        source, "INTERNET_MONITOR_HISTORY_PATH", DEFAULT_HISTORY_PATH
+    )
+    if history_path == status_path:
+        raise ConfigurationError(
+            "INTERNET_MONITOR_HISTORY_PATH must differ from "
+            "INTERNET_MONITOR_STATUS_PATH."
+        )
 
     monitor = MonitorSettings(
         log_level=_env_choice(
@@ -326,6 +340,21 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             source, "INTERNET_MONITOR_OUTAGE_ALERT_DELAY_SECONDS", 300, minimum=0
         ),
         status_path=status_path,
+        history_path=history_path,
+        history_detailed_hours=_env_int(
+            source,
+            "INTERNET_MONITOR_HISTORY_DETAILED_HOURS",
+            24,
+            minimum=24,
+            maximum=168,
+        ),
+        history_minute_days=_env_int(
+            source,
+            "INTERNET_MONITOR_HISTORY_MINUTE_DAYS",
+            30,
+            minimum=30,
+            maximum=365,
+        ),
         timezone=_validate_timezone(
             _env_required_str(
                 source, "INTERNET_MONITOR_TIMEZONE", "America/Detroit"
@@ -344,6 +373,14 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         threads=_env_int(source, "INTERNET_MONITOR_WEB_THREADS", 2, minimum=1),
         allowed_hosts=_env_items(source, "INTERNET_MONITOR_WEB_ALLOWED_HOSTS"),
         status_path=status_path,
+        history_path=history_path,
+        history_max_points=_env_int(
+            source,
+            "INTERNET_MONITOR_HISTORY_MAX_POINTS",
+            720,
+            minimum=120,
+            maximum=2000,
+        ),
         status_max_age=_env_int(
             source, "INTERNET_MONITOR_WEB_STATUS_MAX_AGE", 300, minimum=0
         ),

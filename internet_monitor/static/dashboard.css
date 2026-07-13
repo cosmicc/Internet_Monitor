@@ -222,6 +222,64 @@ h3 {
     margin-bottom: 14px;
 }
 
+.history-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 14px;
+    padding-top: 13px;
+    padding-bottom: 13px;
+}
+
+.history-copy {
+    min-width: 0;
+}
+
+.history-summary {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.history-ranges {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-deep);
+}
+
+.history-ranges button {
+    min-width: 42px;
+    min-height: 32px;
+    padding: 5px 9px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.71rem;
+    font-weight: 650;
+}
+
+.history-ranges button:hover {
+    color: var(--text);
+}
+
+.history-ranges button:focus-visible {
+    outline: 2px solid var(--warning-border);
+    outline-offset: 1px;
+}
+
+.history-ranges button[aria-pressed="true"] {
+    border-color: var(--success-border);
+    background: var(--success);
+    color: var(--success-text);
+}
+
 .section-heading {
     display: flex;
     align-items: center;
@@ -351,7 +409,8 @@ h3 {
     font-size: 0.65rem;
 }
 
-.sparkline {
+.sparkline,
+.table-sparkline {
     display: block;
     width: 100%;
     height: 30px;
@@ -359,8 +418,10 @@ h3 {
 }
 
 .sparkline .chart-segment,
+.table-sparkline .chart-segment,
 .session-chart .chart-segment,
 .sparkline .chart-loss-outage,
+.table-sparkline .chart-loss-outage,
 .session-chart .chart-loss-outage {
     fill: none;
     stroke-linecap: round;
@@ -368,7 +429,8 @@ h3 {
     vector-effect: non-scaling-stroke;
 }
 
-.sparkline .chart-segment {
+.sparkline .chart-segment,
+.table-sparkline .chart-segment {
     stroke-width: 1.5;
 }
 
@@ -520,6 +582,12 @@ h3 {
     margin-top: 2px;
     font-size: 0.68rem;
     font-weight: 400;
+}
+
+.table-sparkline {
+    width: 90px;
+    min-width: 72px;
+    height: 28px;
 }
 
 .summary-metrics,
@@ -775,6 +843,25 @@ h3 {
         padding: 13px;
     }
 
+    .history-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 11px;
+    }
+
+    .history-ranges {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        width: 100%;
+    }
+
+    .history-ranges button {
+        min-width: 0;
+        min-height: 44px;
+        padding-right: 4px;
+        padding-left: 4px;
+    }
+
     .details-grid {
         grid-template-columns: minmax(0, 1fr);
     }
@@ -849,6 +936,16 @@ h3 {
         font-weight: 650;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+    }
+
+    .metrics-table tbody td[data-label="History"] {
+        grid-column: 1 / -1;
+    }
+
+    .table-sparkline {
+        width: 100%;
+        min-width: 0;
+        height: 34px;
     }
 
     .summary-metrics,

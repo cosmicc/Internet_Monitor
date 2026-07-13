@@ -148,6 +148,66 @@ def test_probe_cycle_collects_both_internet_targets_gateways_and_dns(monkeypatch
     assert result.resolver_result.state == "up"
 
 
+def test_history_series_and_values_cover_every_dashboard_check():
+    """Retained history should align gateways, targets, resolver, and DNS servers."""
+    settings = MonitorSettings(
+        gateway_1_ip="10.0.0.1",
+        gateway_2_ip="203.0.113.1",
+        dns_servers=("1.1.1.1", "8.8.8.8"),
+    )
+    successful = lambda host, latency: monitor.PingResult(
+        True,
+        latency,
+        0,
+        "",
+        host=host,
+        min_latency_ms=latency - 1,
+        max_latency_ms=latency + 1,
+    )
+    failed = monitor.PingResult(
+        False,
+        None,
+        100,
+        "",
+        host="8.8.8.8",
+        transmitted=5,
+        received=0,
+    )
+    ping_results = {
+        "1.1.1.1": successful("1.1.1.1", 12.0),
+        "8.8.8.8": failed,
+        "10.0.0.1": successful("10.0.0.1", 1.0),
+        "203.0.113.1": successful("203.0.113.1", 5.0),
+    }
+    series = monitor.build_history_series(settings)
+    values = monitor.build_history_values(
+        settings,
+        ping_results["1.1.1.1"],
+        ping_results,
+        monitor.ResolverResult("up", 4.0),
+        [
+            monitor.DnsQueryResult("1.1.1.1", "up", 8.0, "NOERROR", 1),
+            monitor.DnsQueryResult("8.8.8.8", "down", None, error="timeout"),
+        ],
+    )
+
+    assert [item.id for item in series] == [
+        "gateway-1",
+        "gateway-2",
+        "internet",
+        "internet-target-0",
+        "internet-target-1",
+        "dns-resolver",
+        "dns-server-0",
+        "dns-server-1",
+    ]
+    assert set(values) == {item.id for item in series}
+    assert values["gateway-1"].average == 1.0
+    assert values["internet-target-1"].loss == 100
+    assert values["dns-server-1"].average is None
+    assert values["dns-server-1"].loss == 100
+
+
 def test_run_dig_extracts_query_time_and_marks_slow_response(monkeypatch):
     """dig output should produce a server-specific slow result."""
     calls = []

@@ -10,6 +10,7 @@ from typing import Any
 from flask import Flask, abort, jsonify, render_template, request
 
 from . import __version__
+from .history import VALID_HISTORY_RANGES, load_history_payload
 from .settings import Settings, load_settings
 
 
@@ -433,15 +434,30 @@ def create_app(settings: Settings | None = None) -> Flask:
         """Return the sanitized current snapshot for same-origin live polling."""
         return jsonify(load_dashboard(app_settings))
 
+    @app.route("/api/history")
+    def history_api():
+        """Return sanitized, downsampled container-lifetime chart history."""
+        range_name = request.args.get("range", "24h")
+        if range_name not in VALID_HISTORY_RANGES:
+            abort(400, description="Unsupported monitoring history range")
+        return jsonify(
+            load_history_payload(
+                web_settings.history_path,
+                range_name,
+                web_settings.history_max_points,
+            )
+        )
+
     @app.route("/")
     def index():
-        """Render the latest Internet and DNS status without persisted logs."""
+        """Render current status and container-lifetime monitoring history."""
         return render_template(
             "index.html",
             title=web_settings.title,
             version=__version__,
             dashboard=load_dashboard(app_settings),
             refresh_interval=web_settings.refresh_interval,
+            history_default_range="24h",
         )
 
     return app

@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from internet_monitor.history import HistorySeries, HistoryStore, HistoryValue
 from internet_monitor.settings import (
     MonitorSettings,
     PushoverSettings,
@@ -16,9 +17,11 @@ from internet_monitor.web import create_app
 def _settings(tmp_path: Path, *, allowed_hosts=()):
     """Build isolated app settings backed by an ephemeral snapshot path."""
     status_path = tmp_path / "status.json"
+    history_path = tmp_path / "history.json"
     return Settings(
         monitor=MonitorSettings(
             status_path=str(status_path),
+            history_path=str(history_path),
             interval=15,
             gateway_1_ip="10.0.0.1",
             gateway_2_ip="203.0.113.1",
@@ -27,6 +30,7 @@ def _settings(tmp_path: Path, *, allowed_hosts=()):
         web=WebSettings(
             title="Test Monitor",
             status_path=str(status_path),
+            history_path=str(history_path),
             allowed_hosts=allowed_hosts,
             refresh_interval=15,
         ),
@@ -151,6 +155,10 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"725.00 ms" in response.data
     assert b"red marks loss" in response.data
     assert b"data-loss-series" in response.data
+    assert b"Monitoring History" in response.data
+    assert b'data-history-range="24h"' in response.data
+    assert b'data-sparkline="internet-target-0"' in response.data
+    assert b'data-sparkline="dns-server-0"' in response.data
     assert b"Packet loss" in response.data
     assert b"Connection Log" not in response.data
     assert b"Clear Log" not in response.data
@@ -166,6 +174,8 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"chart-segment-loss" in script_response.data
     assert b"chart-loss-outage" in script_response.data
     assert b"no latency response" in script_response.data
+    assert b"loadHistory" in script_response.data
+    assert b"failed DNS check" in script_response.data
 
     api_response = create_app(settings).test_client().get("/api/status")
     assert api_response.status_code == 200
@@ -200,8 +210,46 @@ def test_allowed_hosts_blocks_dashboard_but_not_local_health_check(tmp_path: Pat
     health = client.get("/health", environ_base={"REMOTE_ADDR": "10.0.0.2"})
     favicon = client.get("/favicon.ico", environ_base={"REMOTE_ADDR": "10.0.0.2"})
     api = client.get("/api/status", environ_base={"REMOTE_ADDR": "10.0.0.2"})
+    history_api = client.get(
+        "/api/history?range=24h",
+        environ_base={"REMOTE_ADDR": "10.0.0.2"},
+    )
 
     assert blocked.status_code == 403
     assert health.status_code == 200
     assert favicon.status_code == 204
     assert api.status_code == 403
+    assert history_api.status_code == 403
+
+
+def test_history_api_serves_sanitized_container_history(tmp_path: Path):
+    """The dashboard API should expose bounded history for configured ranges."""
+    settings = _settings(tmp_path)
+    timestamp = datetime.now(timezone.utc)
+    store = HistoryStore(
+        settings.monitor.history_path,
+        [HistorySeries("internet", "Active Internet", "ping", "1.1.1.1")],
+        started_at=timestamp,
+    )
+    store.record(timestamp, {"internet": HistoryValue(18.25, 10)})
+    client = create_app(settings).test_client()
+
+    response = client.get("/api/history?range=24h")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["available"] is True
+    assert payload["range"] == "24h"
+    assert payload["point_count"] == 1
+    assert payload["series"][0]["id"] == "internet"
+    assert payload["points"][0][1][0] == [18.25, 10.0, 18.25, 18.25]
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_history_api_rejects_unsupported_ranges(tmp_path: Path):
+    """History range input should be constrained to the explicit allow-list."""
+    response = create_app(_settings(tmp_path)).test_client().get(
+        "/api/history?range=forever"
+    )
+
+    assert response.status_code == 400

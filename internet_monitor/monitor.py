@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run Internet, latency, packet-loss, resolver, and DNS-server checks.
 
-The monitor keeps only current process state. Human-readable events are written
-to the container console, while a small atomic JSON snapshot in tmpfs
-allows the colocated web process to render the latest result.
+Human-readable events are written to the container console. Atomic current and
+tiered-history JSON snapshots in tmpfs allow the colocated web process to render
+live and container-lifetime results without durable storage.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from typing import Optional
 import pytz
 import requests
 
+from .history import HistorySeries, HistoryStore, HistoryValue
 from .settings import (
     ConfigurationError,
     MonitorSettings,
@@ -602,6 +603,106 @@ def _ping_snapshot(result: PingResult, settings: MonitorSettings) -> dict[str, o
     }
 
 
+def configured_internet_targets(
+    settings: MonitorSettings,
+) -> list[tuple[str, str]]:
+    """Return unique primary and backup targets in dashboard order."""
+    targets: list[tuple[str, str]] = []
+    included_hosts: set[str] = set()
+    for role, host in (
+        ("Primary", settings.ping_host),
+        ("Backup", settings.backup_ping_host),
+    ):
+        if host and host not in included_hosts:
+            included_hosts.add(host)
+            targets.append((role, host))
+    return targets
+
+
+def build_history_series(settings: MonitorSettings) -> list[HistorySeries]:
+    """Build stable metadata for every retained ping and DNS series."""
+    series = [
+        HistorySeries("gateway-1", "Gateway 1", "ping", settings.gateway_1_ip),
+        HistorySeries("gateway-2", "Gateway 2", "ping", settings.gateway_2_ip),
+        HistorySeries("internet", "Active Internet", "ping", "Selected target"),
+    ]
+    series.extend(
+        HistorySeries(
+            f"internet-target-{index}",
+            f"{role} Internet",
+            "ping",
+            host,
+        )
+        for index, (role, host) in enumerate(configured_internet_targets(settings))
+    )
+    series.append(
+        HistorySeries(
+            "dns-resolver",
+            "System Resolver",
+            "dns",
+            settings.dns_host,
+        )
+    )
+    series.extend(
+        HistorySeries(
+            f"dns-server-{index}",
+            f"DNS {server}",
+            "dns",
+            server,
+        )
+        for index, server in enumerate(settings.dns_servers)
+    )
+    return series
+
+
+def _ping_history_value(result: PingResult) -> HistoryValue:
+    """Convert one fping result into a loss-preserving history value."""
+    loss = result.loss_percent
+    if loss is None:
+        loss = 0 if result.success else 100
+    return HistoryValue(
+        average=result.avg_latency_ms,
+        loss=float(loss),
+        minimum=result.min_latency_ms,
+        maximum=result.max_latency_ms,
+    )
+
+
+def build_history_values(
+    settings: MonitorSettings,
+    ping_result: PingResult,
+    ping_results: dict[str, PingResult],
+    resolver_result: ResolverResult,
+    dns_results: list[DnsQueryResult],
+) -> dict[str, HistoryValue]:
+    """Build one aligned history observation from a completed probe cycle."""
+    values: dict[str, HistoryValue] = {
+        "internet": _ping_history_value(ping_result),
+        "dns-resolver": HistoryValue(
+            average=resolver_result.response_time_ms,
+            loss=100.0 if resolver_result.state == "down" else 0.0,
+        ),
+    }
+    for position, host in (
+        (1, settings.gateway_1_ip),
+        (2, settings.gateway_2_ip),
+    ):
+        if host and host in ping_results:
+            values[f"gateway-{position}"] = _ping_history_value(
+                ping_results[host]
+            )
+    for index, (_role, host) in enumerate(configured_internet_targets(settings)):
+        values[f"internet-target-{index}"] = _ping_history_value(
+            ping_results[host]
+        )
+    for index, result in enumerate(dns_results):
+        values[f"dns-server-{index}"] = HistoryValue(
+            average=result.response_time_ms,
+            loss=100.0 if result.state == "down" else 0.0,
+        )
+    return values
+
+
 def write_status(
     settings: MonitorSettings,
     internet_state: str,
@@ -612,18 +713,11 @@ def write_status(
     dns_results: list[DnsQueryResult],
     diagnosis: Diagnosis,
     loop_duration_ms: float,
+    snapshot_time: datetime | None = None,
 ) -> None:
     """Atomically write the latest non-persistent dashboard snapshot."""
     internet_targets: list[dict[str, object]] = []
-    target_definitions = (
-        ("Primary", settings.ping_host),
-        ("Backup", settings.backup_ping_host),
-    )
-    included_targets: set[str] = set()
-    for role, host in target_definitions:
-        if not host or host in included_targets:
-            continue
-        included_targets.add(host)
+    for role, host in configured_internet_targets(settings):
         target_snapshot = _ping_snapshot(ping_results[host], settings)
         target_snapshot["role"] = role
         internet_targets.append(target_snapshot)
@@ -652,7 +746,7 @@ def write_status(
         gateway_snapshots.append(gateway_snapshot)
 
     data = {
-        "timestamp": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": (snapshot_time or utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "interval_seconds": settings.interval,
         "loop_duration_ms": round(loop_duration_ms, 2),
         "diagnosis": {
@@ -1150,6 +1244,13 @@ def run_monitor(settings: Settings) -> None:
     """Run the monitor loop until interrupted or a required executable is missing."""
     monitor = settings.monitor
     notifier = PushoverNotifier(settings.pushover, monitor.max_alerts_per_hour)
+    history_store = HistoryStore(
+        monitor.history_path,
+        build_history_series(monitor),
+        detailed_hours=monitor.history_detailed_hours,
+        minute_days=monitor.history_minute_days,
+        started_at=utcnow(),
+    )
 
     ping_fail_count = 0
     outage_start: Optional[datetime] = None
@@ -1178,7 +1279,8 @@ def run_monitor(settings: Settings) -> None:
 
     LOGGER.info(
         "Starting Internet Monitor: interval=%ss ping_hosts=%s gateways=%s "
-        "dns_host=%s dns_servers=%s slow_dns_threshold_ms=%.2f",
+        "dns_host=%s dns_servers=%s slow_dns_threshold_ms=%.2f "
+        "history_detailed_hours=%s history_minute_days=%s",
         monitor.interval,
         ",".join(
             host
@@ -1192,6 +1294,8 @@ def run_monitor(settings: Settings) -> None:
         monitor.dns_host,
         ",".join(monitor.dns_servers),
         monitor.dns_slow_threshold_ms,
+        monitor.history_detailed_hours,
+        monitor.history_minute_days,
     )
 
     while True:
@@ -1365,6 +1469,18 @@ def run_monitor(settings: Settings) -> None:
         notifier.flush_queue()
 
         elapsed = time.monotonic() - loop_started
+        snapshot_time = utcnow()
+
+        history_store.record(
+            snapshot_time,
+            build_history_values(
+                monitor,
+                ping_result,
+                ping_results,
+                resolver_result,
+                dns_results,
+            ),
+        )
 
         write_status(
             monitor,
@@ -1376,6 +1492,7 @@ def run_monitor(settings: Settings) -> None:
             dns_results,
             diagnosis,
             elapsed * 1000,
+            snapshot_time,
         )
 
         elapsed = time.monotonic() - loop_started

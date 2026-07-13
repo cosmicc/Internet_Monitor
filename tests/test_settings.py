@@ -20,9 +20,14 @@ def test_default_settings_match_docker_defaults():
     assert settings.monitor.dns_slow_threshold_ms == 500
     assert settings.monitor.ping_period_ms == 1000
     assert settings.monitor.status_path == "/tmp/internet-monitor/status.json"
+    assert settings.monitor.history_path == "/tmp/internet-monitor/history.json"
+    assert settings.monitor.history_detailed_hours == 24
+    assert settings.monitor.history_minute_days == 30
     assert settings.web.title == "Internet Monitor"
     assert settings.web.port == 5005
     assert settings.web.status_path == settings.monitor.status_path
+    assert settings.web.history_path == settings.monitor.history_path
+    assert settings.web.history_max_points == 720
     assert settings.pushover.retry_initial_seconds == 30
     assert settings.pushover.retry_max_seconds == 900
 
@@ -39,6 +44,10 @@ def test_environment_overrides_are_parsed_and_dns_servers_are_deduplicated():
             "INTERNET_MONITOR_DNS_RECORD_TYPE": "aaaa",
             "INTERNET_MONITOR_DNS_SLOW_THRESHOLD_MS": "250.5",
             "INTERNET_MONITOR_INTERVAL": "30",
+            "INTERNET_MONITOR_HISTORY_PATH": "/tmp/custom-history.json",
+            "INTERNET_MONITOR_HISTORY_DETAILED_HOURS": "48",
+            "INTERNET_MONITOR_HISTORY_MINUTE_DAYS": "60",
+            "INTERNET_MONITOR_HISTORY_MAX_POINTS": "1000",
             "INTERNET_MONITOR_WEB_ALLOWED_HOSTS": "127.0.0.1, 10.0.0.5",
             "PUSHOVER_TOKEN": "token-from-alias",
             "PUSHOVER_USER": "user-from-alias",
@@ -55,7 +64,12 @@ def test_environment_overrides_are_parsed_and_dns_servers_are_deduplicated():
     assert settings.monitor.dns_record_type == "AAAA"
     assert settings.monitor.dns_slow_threshold_ms == 250.5
     assert settings.monitor.interval == 30
+    assert settings.monitor.history_path == "/tmp/custom-history.json"
+    assert settings.monitor.history_detailed_hours == 48
+    assert settings.monitor.history_minute_days == 60
     assert settings.web.refresh_interval == 30
+    assert settings.web.history_path == "/tmp/custom-history.json"
+    assert settings.web.history_max_points == 1000
     assert settings.web.allowed_hosts == ("127.0.0.1", "10.0.0.5")
     assert settings.pushover.token == "token-from-alias"
     assert settings.pushover.user == "user-from-alias"
@@ -92,6 +106,10 @@ def test_docker_secret_files_take_precedence(tmp_path: Path):
         ("INTERNET_MONITOR_PING_PERIOD_MS", "1"),
         ("INTERNET_MONITOR_PING_TIMEOUT_MS", "10"),
         ("INTERNET_MONITOR_STATUS_PATH", ""),
+        ("INTERNET_MONITOR_HISTORY_PATH", ""),
+        ("INTERNET_MONITOR_HISTORY_DETAILED_HOURS", "23"),
+        ("INTERNET_MONITOR_HISTORY_MINUTE_DAYS", "29"),
+        ("INTERNET_MONITOR_HISTORY_MAX_POINTS", "119"),
         ("INTERNET_MONITOR_LOG_LEVEL", "verbose"),
         ("INTERNET_MONITOR_DNS_SERVERS", "resolver.example.com"),
         ("INTERNET_MONITOR_DNS_RECORD_TYPE", "TXT"),
@@ -124,5 +142,16 @@ def test_pushover_retry_maximum_cannot_be_shorter_than_initial_delay():
             {
                 "INTERNET_MONITOR_PUSHOVER_RETRY_INITIAL_SECONDS": "120",
                 "INTERNET_MONITOR_PUSHOVER_RETRY_MAX_SECONDS": "60",
+            }
+        )
+
+
+def test_history_and_status_paths_must_be_distinct():
+    """Independent atomic snapshots must never overwrite one another."""
+    with pytest.raises(ConfigurationError, match="must differ"):
+        load_settings(
+            {
+                "INTERNET_MONITOR_STATUS_PATH": "/tmp/shared.json",
+                "INTERNET_MONITOR_HISTORY_PATH": "/tmp/shared.json",
             }
         )

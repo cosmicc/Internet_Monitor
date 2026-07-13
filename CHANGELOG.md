@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.2 - 07.13.2026
+
+### Added
+
+- Added container-lifetime ping and DNS response-time history with 1-hour,
+  6-hour, 24-hour, 7-day, and All dashboard ranges.
+- Added per-target and per-resolver history sparklines, including red markers for
+  packet loss and failed DNS checks.
+- Added configurable detailed, minute-summary, and dashboard-point retention
+  limits through synchronized Docker environment variables.
+
+### Changed
+
+- Changed dashboard history from browser memory to a shared, atomic tmpfs
+  snapshot that retains detailed samples for 24 hours, minute summaries for 30
+  days, and hourly summaries for the remaining container lifetime.
+- Increased the Compose and Swarm tmpfs allocation to 64 MiB for bounded
+  container-scoped history.
+- Changed long-range downsampling to retain the maximum packet loss or DNS
+  failure observed in each displayed interval.
+
+### Fixed
+
+- Fixed monitoring charts losing all collected information when the dashboard
+  was reloaded or opened in a new browser session.
+
 ## 0.1.1 - 07.13.2026
 
 ### Added

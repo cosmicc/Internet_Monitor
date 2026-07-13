@@ -4,7 +4,7 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.1.1 image from GHCR. For
+The default Swarm deployment pulls the versioned 0.1.2 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
 override `INTERNET_MONITOR_IMAGE` with an image published under a test tag.
 
@@ -52,12 +52,13 @@ hop.
 4. Deploy the stack and inspect its console logs.
 
 Compose builds the image from the repository. It grants only `NET_RAW`, runs as
-an unprivileged user, and stores the latest dashboard snapshot in tmpfs.
+an unprivileged user, and stores current status and container-lifetime chart
+history in a 64 MiB tmpfs.
 
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.1.1`. Override
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.1.2`. Override
 `INTERNET_MONITOR_IMAGE` when testing another registry tag.
 
 Deploy without Pushover secrets:
@@ -116,7 +117,7 @@ survive a restart.
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.1.1`, to match the package
+The workflow requires the release tag, such as `v0.1.2`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.
@@ -131,8 +132,21 @@ docker service logs -f internet-monitor_internet-monitor
 ```
 
 There is no log volume or database to back up. The current dashboard state,
-browser-session charts, alert counters, and queued Pushover messages reset when
-the page or container restarts, as applicable.
+alert counters, chart history, and queued Pushover messages reset when the
+container restarts or is redeployed. Reloading or reopening a browser restores
+the same container-scoped history. The default retention is:
+
+- Detailed probe-cycle samples for 24 hours.
+- Minute summaries for 30 days.
+- Hourly summaries for the remaining lifetime of the container.
+
+The dashboard downsamples long ranges while preserving the highest packet loss
+or DNS failure in each displayed interval. Retention and response point limits
+are configured by `INTERNET_MONITOR_HISTORY_DETAILED_HOURS`,
+`INTERNET_MONITOR_HISTORY_MINUTE_DAYS`, and
+`INTERNET_MONITOR_HISTORY_MAX_POINTS`. Keep `INTERNET_MONITOR_HISTORY_PATH` on
+the container tmpfs; pointing it at persistent storage changes the approved
+storage model.
 
 ### DNS Works On The Host But Fails In The Swarm Task
 

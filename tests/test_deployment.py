@@ -31,6 +31,10 @@ RUNTIME_ENVIRONMENT_VARIABLES = {
     "INTERNET_MONITOR_LATENCY_ALERT_DELAY_SECONDS",
     "INTERNET_MONITOR_OUTAGE_ALERT_DELAY_SECONDS",
     "INTERNET_MONITOR_STATUS_PATH",
+    "INTERNET_MONITOR_HISTORY_PATH",
+    "INTERNET_MONITOR_HISTORY_DETAILED_HOURS",
+    "INTERNET_MONITOR_HISTORY_MINUTE_DAYS",
+    "INTERNET_MONITOR_HISTORY_MAX_POINTS",
     "INTERNET_MONITOR_TIMEZONE",
     "INTERNET_MONITOR_WEB_TITLE",
     "INTERNET_MONITOR_WEB_PORT",
@@ -76,13 +80,14 @@ def test_deployments_do_not_persist_application_state_or_logs():
     assert "internet-monitor-data" not in deployment_text
     assert "connection.log" not in deployment_text
     assert "INTERNET_MONITOR_LOG_PATH" not in deployment_text
+    assert deployment_text.count("size: 67108864") == 2
 
 
 def test_version_surfaces_match_release_version():
     """Package, image defaults, metadata, and released changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.1.1"
+    assert __version__ == "0.1.2"
     assert pyproject["project"]["version"] == __version__
     assert f"ARG APP_VERSION={__version__}" in _text("Dockerfile")
     assert f"internet-monitor:{__version__}" in _text("docker-compose.yml")

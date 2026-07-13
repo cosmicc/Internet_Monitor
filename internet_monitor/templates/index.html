@@ -9,6 +9,13 @@
     {% if value is not none %}{{ "%.2f"|format(value) }}{{ suffix }}{% else %}Unavailable{% endif %}
 {%- endmacro %}
 
+{% macro history_sparkline(series_id, label, kind="ping", css_class="table-sparkline") -%}
+<svg class="{{ css_class }}" data-sparkline="{{ series_id }}" data-chart-label="{{ label }}" data-chart-kind="{{ kind }}" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="{{ label }} history; no samples recorded yet">
+    <g data-series aria-hidden="true"></g>
+    <g data-loss-series aria-hidden="true"></g>
+</svg>
+{%- endmacro %}
+
 {% macro path_node(node) -%}
 <article class="path-node {{ node.status.css_class }}" data-path-node="{{ node.id }}" data-state="{{ node.status.state }}">
     <div class="path-node-heading">
@@ -28,11 +35,8 @@
             <span>Avg <strong data-node-average>{{ ping_value(node.average_latency_ms) }}</strong></span>
             <span>Loss <strong data-node-loss>{% if node.loss_percent is not none %}{{ node.loss_percent }}%{% else %}Unavailable{% endif %}</strong></span>
         </div>
-        <div class="sparkline-label">This browser session · red marks loss</div>
-        <svg class="sparkline" data-sparkline="{{ node.id }}" data-chart-label="{{ node.label }} latency" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="{{ node.label }} latency during this browser session; no samples recorded yet">
-            <g data-series aria-hidden="true"></g>
-            <g data-loss-series aria-hidden="true"></g>
-        </svg>
+        <div class="sparkline-label">Retained history · red marks loss</div>
+        {{ history_sparkline(node.id, node.label ~ " latency", "ping", "sparkline") }}
     {% endif %}
 </article>
 {%- endmacro %}
@@ -51,6 +55,8 @@
     class="dashboard-shell"
     id="dashboard"
     data-status-url="{{ url_for('status_api') }}"
+    data-history-url="{{ url_for('history_api') }}"
+    data-history-default-range="{{ history_default_range }}"
     data-refresh-ms="{{ refresh_interval * 1000 }}"
 >
     <header class="page-header">
@@ -100,6 +106,19 @@
         </div>
     </section>
 
+    <section class="panel history-toolbar" aria-labelledby="history-heading">
+        <div class="history-copy">
+            <p class="eyebrow">Container lifetime</p>
+            <h2 id="history-heading">Monitoring History</h2>
+            <p class="history-summary" data-history-summary aria-live="polite">Loading retained history…</p>
+        </div>
+        <div class="history-ranges" role="group" aria-label="Monitoring history range">
+            {% for range_value, range_label in [("1h", "1h"), ("6h", "6h"), ("24h", "24h"), ("7d", "7d"), ("all", "All")] %}
+            <button type="button" data-history-range="{{ range_value }}" aria-pressed="{{ 'true' if range_value == history_default_range else 'false' }}">{{ range_label }}</button>
+            {% endfor %}
+        </div>
+    </section>
+
     <section class="details-grid" aria-label="Detailed monitoring statistics">
         <article class="panel internet-panel">
             <div class="section-heading">
@@ -119,6 +138,7 @@
                             <th scope="col">Min / Avg / Max</th>
                             <th scope="col">Sent / Received</th>
                             <th scope="col">Packet loss</th>
+                            <th scope="col">History</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -138,6 +158,9 @@
                                 {% if target.transmitted is not none and target.received is not none %}{{ target.transmitted }} / {{ target.received }}{% else %}Unavailable{% endif %}
                             </td>
                             <td class="tabular" data-label="Packet loss" data-target-loss>{% if target.loss_percent is not none %}{{ target.loss_percent }}%{% else %}Unavailable{% endif %}</td>
+                            <td data-label="History">
+                                {{ history_sparkline("internet-target-" ~ loop.index0, target.role ~ " Internet latency") }}
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -162,7 +185,7 @@
             <div class="chart-heading">
                 <div>
                     <h3>Active-target latency</h3>
-                    <p>This browser session</p>
+                    <p data-history-caption>Container history · 24 hours</p>
                 </div>
                 <strong class="tabular" data-bind="active-average">{{ ping_value(dashboard.internet.average_latency_ms) }}</strong>
             </div>
@@ -170,14 +193,14 @@
                 <span><i class="legend-line legend-latency" aria-hidden="true"></i>Latency</span>
                 <span><i class="legend-line legend-loss" aria-hidden="true"></i>Packet loss</span>
             </div>
-            <svg class="session-chart" data-sparkline="internet" data-chart-label="Active Internet target latency" viewBox="0 0 600 170" preserveAspectRatio="none" role="img" aria-label="Active Internet target latency during this browser session; no samples recorded yet">
+            <svg class="session-chart" data-sparkline="internet" data-chart-label="Active Internet target latency" data-chart-kind="ping" viewBox="0 0 600 170" preserveAspectRatio="none" role="img" aria-label="Active Internet target latency history; no samples recorded yet">
                 <line data-grid-line x1="0" y1="25" x2="600" y2="25"></line>
                 <line data-grid-line x1="0" y1="85" x2="600" y2="85"></line>
                 <line data-grid-line x1="0" y1="145" x2="600" y2="145"></line>
                 <g data-series aria-hidden="true"></g>
                 <g data-loss-series aria-hidden="true"></g>
             </svg>
-            <div class="chart-axis"><span>Earlier</span><span>Now</span></div>
+            <div class="chart-axis"><span data-history-axis-start>24 hours ago</span><span>Now</span></div>
         </article>
 
         <article class="panel gateway-panel">
@@ -226,6 +249,7 @@
                             <th scope="col">Query time</th>
                             <th scope="col">Response</th>
                             <th scope="col">Answers</th>
+                            <th scope="col">History</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -235,6 +259,9 @@
                             <td class="tabular" data-label="Query time" data-dns-time>{{ ping_value(dashboard.dns.resolver.response_time_ms) }}</td>
                             <td data-label="Response" data-dns-response>{{ dashboard.dns.resolver.response_status }}</td>
                             <td class="tabular" data-label="Answers" data-dns-answers>—</td>
+                            <td data-label="History">
+                                {{ history_sparkline("dns-resolver", "System Resolver response time", "dns") }}
+                            </td>
                         </tr>
                         {% for dns_server in dashboard.dns.servers %}
                         <tr data-dns-index="{{ loop.index0 }}">
@@ -243,6 +270,9 @@
                             <td class="tabular" data-label="Query time" data-dns-time>{{ ping_value(dns_server.response_time_ms) }}</td>
                             <td data-label="Response" data-dns-response>{{ dns_server.response_status }}</td>
                             <td class="tabular" data-label="Answers" data-dns-answers>{% if dns_server.answer_count is not none %}{{ dns_server.answer_count }}{% else %}—{% endif %}</td>
+                            <td data-label="History">
+                                {{ history_sparkline("dns-server-" ~ loop.index0, "DNS " ~ dns_server.server ~ " response time", "dns") }}
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>

@@ -10,8 +10,10 @@ Internet Monitor is a Docker-first Python service. Application code lives in
 - `monitor.py` runs the concurrent fping, gateway, system resolver, and
   per-server dig cycle, alert tracking, Pushover retry queue, console logging,
   path diagnosis, and ephemeral status updates.
-- `web.py` exposes the Flask status dashboard, sanitized live status endpoint,
-  and health endpoint.
+- `history.py` keeps loss-preserving detailed, minute, and hourly monitoring
+  history in a compact, permission-restricted tmpfs snapshot.
+- `web.py` exposes the Flask status dashboard, sanitized live status and history
+  endpoints, and health endpoint.
 - `healthcheck.py` is the Docker health-check entry point.
 - `internet_monitor/templates/` contains Flask templates.
 - `internet_monitor/static/` contains the CSP-compatible dashboard CSS and
@@ -27,11 +29,15 @@ the environment contract changes.
 Application logs must go only to stdout or stderr for Docker collection. Do not
 add application log files or a web log viewer.
 
-The web and monitor processes share only the latest status snapshot at
-`/tmp/internet-monitor/status.json`. Compose and Swarm mount `/tmp` as tmpfs;
-it is not history or durable storage. Alert counters and the ordered Pushover
-retry queue are process-local and reset on restart. Browser-session charts are
-also ephemeral and reset when the page reloads.
+The web and monitor processes share current status at
+`/tmp/internet-monitor/status.json` and container-lifetime chart history at
+`/tmp/internet-monitor/history.json`. Compose and Swarm mount `/tmp` as a 64 MiB
+tmpfs, so neither file is durable storage. Detailed samples are retained for 24
+hours by default, minute summaries for 30 days, and hourly summaries for the
+remaining container lifetime. Downsampling must preserve maximum loss or DNS
+failure values. Alert counters, the ordered Pushover retry queue, status, and
+history all reset on container restart or redeploy; a browser reload must not
+clear history.
 
 Internet Monitor currently requires no long-term storage. Stop and ask the user
 before adding PostgreSQL or any other persistent store.
@@ -123,10 +129,11 @@ The approved visual contract is the Operational Dark palette in
 consistent with those colors and maintain uniform spacing.
 
 The dashboard must provide a complete server-rendered initial view and may poll
-only the same-origin `/api/status` endpoint for live updates. Keep browser charts
-session-local, render packet-loss intervals in the approved failure red, and do
-not turn total loss into a zero-latency sample. Avoid third-party scripts and
-preserve a restrictive Content Security Policy without inline JavaScript.
+only the same-origin `/api/status` and `/api/history` endpoints. History ranges
+are restricted to 1h, 6h, 24h, 7d, and All. Render ping loss and DNS failures in
+the approved failure red, and do not turn a total failure into a zero-latency
+sample. Avoid third-party scripts and preserve a restrictive Content Security
+Policy without inline JavaScript.
 
 Treat dashboard data as sensitive operational information. The direct-address
 allow-list intentionally ignores `X-Forwarded-For`. If nginx or another reverse
