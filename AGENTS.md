@@ -48,6 +48,17 @@ Each explicit DNS server has an independent failure/slow-response alert and
 recovery lifecycle. Keep the slow threshold environment-controlled and never
 construct a shell command from DNS settings.
 
+DNS health is intentionally measured from the monitor task's network namespace.
+If a query succeeds on the Swarm node but `dig` exits with code 9 in the task,
+treat it as a container network, firewall, or resolver access-control problem;
+do not hide a consistently unreachable path by adding query retries.
+
+For a UFW-protected Swarm node using an Unbound service published in host mode,
+keep DNS rules limited to the monitor overlay source subnet, the secondary host
+IP or Unbound overlay destination, port 53, and both UDP and TCP. Do not recommend
+an unrestricted DNS rule or imply that port 53 must be opened between Swarm
+nodes when traffic remains inside a shared overlay.
+
 ## Gateway And Internet Monitoring
 
 `INTERNET_MONITOR_GATEWAY_1_IP` and `INTERNET_MONITOR_GATEWAY_2_IP` are optional
@@ -99,9 +110,11 @@ For Swarm, prefer the external-secret overlay in `docker-stack.secrets.yml`.
 Never put secret values in code, examples, tests, logs, images, or documentation.
 
 `.github/workflows/publish-release-image.yml` publishes the multi-architecture
-GHCR image only when a GitHub Release is published. A version change must keep
-`internet_monitor/__init__.py`, `pyproject.toml`, Docker image defaults, and the
-changelog aligned. Do not create a tag or release unless explicitly requested.
+GHCR image only when a GitHub Release is published. It must build the Python
+wheel and source distribution before publishing the image. A version change
+must keep `internet_monitor/__init__.py`, `pyproject.toml`, Docker image defaults,
+and the changelog aligned. Do not create a tag or release unless explicitly
+requested.
 
 ## Web And Security
 
@@ -111,8 +124,9 @@ consistent with those colors and maintain uniform spacing.
 
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` endpoint for live updates. Keep browser charts
-session-local, avoid third-party scripts, and preserve a restrictive Content
-Security Policy without inline JavaScript.
+session-local, render packet-loss intervals in the approved failure red, and do
+not turn total loss into a zero-latency sample. Avoid third-party scripts and
+preserve a restrictive Content Security Policy without inline JavaScript.
 
 Treat dashboard data as sensitive operational information. The direct-address
 allow-list intentionally ignores `X-Forwarded-For`. If nginx or another reverse

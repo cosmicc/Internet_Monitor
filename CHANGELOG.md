@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.1 - 07.13.2026
+
+### Added
+
+- Added a chart legend and screen-reader descriptions that summarize the latest
+  latency, packet loss, and number of loss-affected samples.
+
+### Changed
+
+- Changed gateway and Internet browser-session charts to render partial-loss
+  intervals and samples in red while keeping clean latency intervals green.
+- Changed the GitHub Release workflow to build the Python wheel and source
+  distribution before publishing the multi-architecture container image.
+- Documented same-node Swarm DNS troubleshooting for secondary host IPs, task
+  overlay source subnets, Unbound access control, and narrowly scoped UFW input
+  and routed rules for both UDP/53 and TCP/53.
+
+### Fixed
+
+- Fixed complete packet-loss samples being omitted from charts by displaying a
+  red vertical outage marker without inventing a zero-latency response.
+
 ## 0.1.0 - 07.13.2026
 
 ### Added

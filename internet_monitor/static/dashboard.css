@@ -358,25 +358,53 @@ h3 {
     overflow: visible;
 }
 
-.sparkline polyline,
-.session-chart polyline {
+.sparkline .chart-segment,
+.session-chart .chart-segment,
+.sparkline .chart-loss-outage,
+.session-chart .chart-loss-outage {
     fill: none;
-    stroke: var(--success-border);
     stroke-linecap: round;
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
 }
 
-.sparkline polyline {
+.sparkline .chart-segment {
     stroke-width: 1.5;
 }
 
-.path-node.status-warning .sparkline polyline {
-    stroke: var(--warning-border);
+.session-chart .chart-segment {
+    stroke-width: 2;
 }
 
-.path-node.status-down .sparkline polyline {
+.chart-segment-clean {
+    stroke: var(--success-border);
+}
+
+.chart-segment-loss,
+.chart-loss-outage {
     stroke: var(--failure-border);
+}
+
+.chart-loss-outage {
+    stroke-dasharray: 2 2;
+    stroke-width: 2;
+}
+
+.session-chart .chart-loss-outage {
+    stroke-dasharray: 5 4;
+    stroke-width: 2.5;
+}
+
+.chart-point-clean {
+    fill: var(--success-border);
+}
+
+.chart-point-loss,
+.chart-loss-point {
+    fill: var(--failure-border);
+    stroke: var(--failure-text);
+    stroke-width: 0.6;
+    vector-effect: non-scaling-stroke;
 }
 
 .path-connector {
@@ -539,6 +567,36 @@ h3 {
     font-size: 0.82rem;
 }
 
+.chart-legend {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 0.65rem;
+}
+
+.chart-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.legend-line {
+    display: inline-block;
+    width: 18px;
+    height: 2px;
+    border-radius: 2px;
+}
+
+.legend-latency {
+    background: var(--success-border);
+}
+
+.legend-loss {
+    background: var(--failure-border);
+}
+
 .session-chart {
     display: block;
     width: 100%;
@@ -546,14 +604,10 @@ h3 {
     border-bottom: 1px solid var(--border);
 }
 
-.session-chart line {
+.session-chart [data-grid-line] {
     stroke: var(--border);
     stroke-dasharray: 3 4;
     vector-effect: non-scaling-stroke;
-}
-
-.session-chart polyline {
-    stroke-width: 2;
 }
 
 .chart-axis {

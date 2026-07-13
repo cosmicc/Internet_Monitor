@@ -40,6 +40,9 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
+      - name: Build Python package
+        run: python -m build
+
       - name: Validate Docker Compose and Swarm definitions
         run: |
           docker compose config --quiet

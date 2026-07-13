@@ -1,6 +1,6 @@
 # Internet Monitor
 
-Internet Monitor 0.1.0 is a Docker-first Python service for Internet and gateway
+Internet Monitor 0.1.1 is a Docker-first Python service for Internet and gateway
 reachability, packet loss, latency, system DNS resolution, and direct DNS-server
 health checks.
 
@@ -12,7 +12,8 @@ health checks.
   configured DNS server.
 - Diagnoses local gateway, upstream gateway, ISP/Internet, and DNS problems.
 - Displays a live Server → Gateway 1 → Gateway 2 → Internet topology, detailed
-  ping statistics, and browser-session latency charts.
+  ping statistics, and browser-session latency charts that mark packet-loss
+  intervals in red.
 - Sends independent Pushover alerts for gateways and DNS servers, with queued
   delivery retries and capped exponential backoff.
 - Writes human-readable application logs only to the Docker console.
@@ -30,8 +31,9 @@ the next device in order toward the Internet.
 
 No monitoring history or logs are persisted. The dashboard receives only the
 latest status through an ephemeral tmpfs snapshot. Browser charts begin when the
-page opens and reset with the page. Pushover credentials can be supplied through
-environment variables or Docker secrets.
+page opens, retain total-loss samples as red outage markers, and reset with the
+page. Pushover credentials can be supplied through environment variables or
+Docker secrets.
 
 For deployment and secret setup, see [INSTALL.md](INSTALL.md).
 

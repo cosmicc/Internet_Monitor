@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   internet-monitor:
-    image: ${INTERNET_MONITOR_IMAGE:-ghcr.io/cosmicc/internet-monitor:0.1.0}
+    image: ${INTERNET_MONITOR_IMAGE:-ghcr.io/cosmicc/internet-monitor:0.1.1}
     read_only: true
     cap_drop:
       - ALL

@@ -20,6 +20,7 @@
     const validStates = new Set(["up", "warning", "down", "unknown"]);
     const seriesByKey = new Map();
     const maximumSeriesPoints = 120;
+    const svgNamespace = "http://www.w3.org/2000/svg";
     let lastRecordedTimestamp = "";
 
     function normalizedStatus(status) {
@@ -109,47 +110,171 @@
         return `${Number(seconds)} second${Number(seconds) === 1 ? "" : "s"}`;
     }
 
-    function addSeriesPoint(key, value) {
-        if (!Number.isFinite(value)) {
+    function addSeriesPoint(key, latencyMilliseconds, lossPercent) {
+        const hasLatency = Number.isFinite(latencyMilliseconds);
+        const hasLoss = Number.isFinite(lossPercent);
+        if (!hasLatency && !hasLoss) {
             return;
         }
-        const values = seriesByKey.get(key) || [];
-        values.push(Number(value));
-        if (values.length > maximumSeriesPoints) {
-            values.splice(0, values.length - maximumSeriesPoints);
+
+        const samples = seriesByKey.get(key) || [];
+        samples.push({
+            latencyMilliseconds: hasLatency ? Number(latencyMilliseconds) : null,
+            lossPercent: hasLoss
+                ? Math.min(100, Math.max(0, Number(lossPercent)))
+                : 0,
+        });
+        if (samples.length > maximumSeriesPoints) {
+            samples.splice(0, samples.length - maximumSeriesPoints);
         }
-        seriesByKey.set(key, values);
+        seriesByKey.set(key, samples);
         drawSeries(key);
     }
 
+    function createSvgElement(tagName, className, attributes) {
+        const element = document.createElementNS(svgNamespace, tagName);
+        element.setAttribute("class", className);
+        Object.entries(attributes).forEach(([name, value]) => {
+            element.setAttribute(name, String(value));
+        });
+        return element;
+    }
+
+    function updateChartDescription(svg, samples) {
+        const chartLabel = svg.dataset.chartLabel || "Latency";
+        const lossSampleCount = samples.filter(
+            (sample) => sample.lossPercent > 0,
+        ).length;
+        const latest = samples.at(-1);
+        let latestDescription = "Latest sample unavailable.";
+
+        if (latest) {
+            if (latest.lossPercent >= 100 || latest.latencyMilliseconds === null) {
+                latestDescription = `Latest sample has ${latest.lossPercent}% packet loss and no latency response.`;
+            } else {
+                latestDescription = `Latest sample is ${latest.latencyMilliseconds.toFixed(2)} milliseconds with ${latest.lossPercent}% packet loss.`;
+            }
+        }
+
+        const lossDescription = lossSampleCount === 0
+            ? "No packet loss samples are shown."
+            : `${lossSampleCount} of ${samples.length} samples show packet loss in red.`;
+        svg.setAttribute(
+            "aria-label",
+            `${chartLabel} during this browser session. ${latestDescription} ${lossDescription}`,
+        );
+    }
+
     function drawSeries(key) {
-        const values = seriesByKey.get(key) || [];
+        const samples = seriesByKey.get(key) || [];
         dashboard.querySelectorAll(`[data-sparkline="${key}"]`).forEach((svg) => {
-            const line = svg.querySelector("[data-series]");
-            if (!line || values.length === 0) {
+            const latencyLayer = svg.querySelector("[data-series]");
+            const lossLayer = svg.querySelector("[data-loss-series]");
+            if (!latencyLayer || !lossLayer || samples.length === 0) {
                 return;
             }
 
+            latencyLayer.replaceChildren();
+            lossLayer.replaceChildren();
             const viewBox = svg.viewBox.baseVal;
             const width = viewBox.width || 100;
             const height = viewBox.height || 28;
             const horizontalPadding = width > 100 ? 4 : 1;
             const verticalPadding = height > 50 ? 12 : 3;
-            const minimum = 0;
-            const maximum = Math.max(...values, 1);
+            const finiteLatencies = samples
+                .map((sample) => sample.latencyMilliseconds)
+                .filter(Number.isFinite);
+            const maximum = Math.max(...finiteLatencies, 1);
             const range = maximum * 1.15;
-            const points = values.length === 1 ? [values[0], values[0]] : values;
-            const coordinates = points.map((value, index) => {
-                const x = horizontalPadding + (
-                    index * (width - horizontalPadding * 2)
-                ) / Math.max(1, points.length - 1);
-                const normalized = (value - minimum) / range;
+            const coordinates = samples.map((sample, index) => {
+                const x = samples.length === 1
+                    ? width - horizontalPadding
+                    : horizontalPadding + (
+                        index * (width - horizontalPadding * 2)
+                    ) / (samples.length - 1);
+                if (!Number.isFinite(sample.latencyMilliseconds)) {
+                    return {x, y: null};
+                }
+                const normalized = sample.latencyMilliseconds / range;
                 const y = height - verticalPadding - normalized * (
                     height - verticalPadding * 2
                 );
-                return `${x.toFixed(2)},${y.toFixed(2)}`;
+                return {x, y};
             });
-            line.setAttribute("points", coordinates.join(" "));
+
+            for (let index = 1; index < samples.length; index += 1) {
+                const previousCoordinate = coordinates[index - 1];
+                const coordinate = coordinates[index];
+                if (previousCoordinate.y === null || coordinate.y === null) {
+                    continue;
+                }
+                const hasPacketLoss = (
+                    samples[index - 1].lossPercent > 0
+                    || samples[index].lossPercent > 0
+                );
+                latencyLayer.append(createSvgElement(
+                    "line",
+                    `chart-segment ${hasPacketLoss ? "chart-segment-loss" : "chart-segment-clean"}`,
+                    {
+                        x1: previousCoordinate.x.toFixed(2),
+                        y1: previousCoordinate.y.toFixed(2),
+                        x2: coordinate.x.toFixed(2),
+                        y2: coordinate.y.toFixed(2),
+                    },
+                ));
+            }
+
+            if (
+                samples.length === 1
+                && coordinates[0].y !== null
+                && samples[0].lossPercent === 0
+            ) {
+                latencyLayer.append(createSvgElement(
+                    "circle",
+                    "chart-point chart-point-clean",
+                    {
+                        cx: coordinates[0].x.toFixed(2),
+                        cy: coordinates[0].y.toFixed(2),
+                        r: width > 100 ? 3 : 1.6,
+                    },
+                ));
+            }
+
+            samples.forEach((sample, index) => {
+                if (sample.lossPercent <= 0) {
+                    return;
+                }
+                const coordinate = coordinates[index];
+                const isTotalLoss = (
+                    sample.lossPercent >= 100
+                    || coordinate.y === null
+                );
+                if (isTotalLoss) {
+                    lossLayer.append(createSvgElement(
+                        "line",
+                        "chart-loss-outage",
+                        {
+                            x1: coordinate.x.toFixed(2),
+                            y1: verticalPadding,
+                            x2: coordinate.x.toFixed(2),
+                            y2: height - verticalPadding,
+                        },
+                    ));
+                    return;
+                }
+
+                lossLayer.append(createSvgElement(
+                    "circle",
+                    "chart-loss-point",
+                    {
+                        cx: coordinate.x.toFixed(2),
+                        cy: coordinate.y.toFixed(2),
+                        r: width > 100 ? 3.5 : 1.8,
+                    },
+                ));
+            });
+
+            updateChartDescription(svg, samples);
         });
     }
 
@@ -178,7 +303,11 @@
             setText("[data-node-average]", formatMilliseconds(node.average_latency_ms), element);
             setText("[data-node-loss]", formatPercent(node.loss_percent), element);
             if (recordPoint && node.id !== "internet") {
-                addSeriesPoint(node.id, node.average_latency_ms);
+                addSeriesPoint(
+                    node.id,
+                    node.average_latency_ms,
+                    node.loss_percent,
+                );
             }
         });
     }
@@ -209,7 +338,11 @@
         setText('[data-bind="loop-duration"]', formatMilliseconds(monitor.loop_duration_ms));
         setText('[data-bind="active-average"]', formatMilliseconds(internet.average_latency_ms));
         if (recordPoint) {
-            addSeriesPoint("internet", internet.average_latency_ms);
+            addSeriesPoint(
+                "internet",
+                internet.average_latency_ms,
+                internet.loss_percent,
+            );
         }
     }
 

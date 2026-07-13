@@ -149,12 +149,23 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"1.1.1.1" in response.data
     assert b"11.00 ms" in response.data
     assert b"725.00 ms" in response.data
+    assert b"red marks loss" in response.data
+    assert b"data-loss-series" in response.data
+    assert b"Packet loss" in response.data
     assert b"Connection Log" not in response.data
     assert b"Clear Log" not in response.data
     assert b"http-equiv=\"refresh\"" not in response.data
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert "script-src 'self'" in response.headers["Content-Security-Policy"]
+
+    script_response = create_app(settings).test_client().get(
+        "/static/dashboard.js"
+    )
+    assert script_response.status_code == 200
+    assert b"chart-segment-loss" in script_response.data
+    assert b"chart-loss-outage" in script_response.data
+    assert b"no latency response" in script_response.data
 
     api_response = create_app(settings).test_client().get("/api/status")
     assert api_response.status_code == 200
