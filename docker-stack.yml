@@ -1,19 +1,18 @@
+version: "3.8"
+
 services:
   internet-monitor:
-    image: ${INTERNET_MONITOR_IMAGE:-internet-monitor:0.1.0}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        APP_VERSION: "0.1.0"
-    restart: unless-stopped
+    image: ${INTERNET_MONITOR_IMAGE:-ghcr.io/cosmicc/internet-monitor:0.1.0}
     read_only: true
     cap_drop:
       - ALL
     cap_add:
       - NET_RAW
     ports:
-      - "${INTERNET_MONITOR_WEB_HOST_PORT:-5005}:${INTERNET_MONITOR_WEB_PORT:-5005}"
+      - target: ${INTERNET_MONITOR_WEB_PORT:-5005}
+        published: ${INTERNET_MONITOR_WEB_HOST_PORT:-5005}
+        protocol: tcp
+        mode: ingress
     volumes:
       - type: tmpfs
         target: /tmp
@@ -65,3 +64,23 @@ services:
       timeout: "${INTERNET_MONITOR_HEALTHCHECK_TIMEOUT:-5s}"
       start_period: "${INTERNET_MONITOR_HEALTHCHECK_START_PERIOD:-20s}"
       retries: ${INTERNET_MONITOR_HEALTHCHECK_RETRIES:-3}
+    stop_grace_period: 20s
+    deploy:
+      replicas: 1
+      endpoint_mode: vip
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+        window: 60s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+        monitor: 30s

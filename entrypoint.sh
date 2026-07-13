@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
+umask 077
 
-echo "[entrypoint] Starting Internet Monitor with environment configuration"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INFO internet_monitor.entrypoint: Starting Internet Monitor processes."
 
 python -u -m internet_monitor.monitor &
 monitor_pid="$!"
@@ -10,6 +11,7 @@ gunicorn \
   --bind "0.0.0.0:${INTERNET_MONITOR_WEB_PORT:-5005}" \
   --workers "${INTERNET_MONITOR_WEB_WORKERS:-1}" \
   --threads "${INTERNET_MONITOR_WEB_THREADS:-2}" \
+  --worker-tmp-dir /tmp \
   --access-logfile - \
   --error-logfile - \
   "internet_monitor.web:create_app()" &

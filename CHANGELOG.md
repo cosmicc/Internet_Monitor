@@ -1,32 +1,62 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 07.13.2026
 
 ### Added
 
-- Added a package-based Python structure under `internet_monitor/`.
-- Added environment-backed settings for monitor, web, status, and Pushover
-  configuration.
-- Added a backup ping host and explicit fping period/timeout settings to reduce
-  false outage and packet-loss alerts from a single remote host.
-- Added `.env.example` with default Docker configuration values.
-- Added pytest coverage for settings parsing, fping output parsing, status-file
-  writes, and the Flask dashboard.
-- Added `AGENTS.md`, `README.md`, `INSTALL.md`, and dependency metadata.
+- Added direct `dig` checks against every server in
+  `INTERNET_MONITOR_DNS_SERVERS`, with response timing and configurable record
+  type, timeout, slow-response threshold, and consecutive-failure trigger.
+- Added independent Pushover failure, slow-response, and recovery alerts for each
+  configured DNS server.
+- Added a current-status dashboard for Internet metrics, the system resolver, and
+  per-server DNS response times.
+- Added two optional, ordered gateway IP checks with independent degradation,
+  outage, and recovery alerts.
+- Added path diagnosis for local network, upstream gateway, ISP/Internet, and DNS
+  failures.
+- Added a live Server → Gateway 1 → Gateway 2 → Internet topology, detailed
+  min/average/max latency and packet statistics, and browser-session charts.
+- Added a same-origin `/api/status` endpoint for live dashboard updates.
+- Added `docker-stack.yml` for a single-replica Swarm deployment using ingress,
+  stop-first updates, rollback settings, and a registry image.
+- Added optional external Swarm secrets through `docker-stack.secrets.yml`.
+- Added a GitHub Release workflow that validates the release tag and publishes
+  multi-architecture GHCR images.
+- Added the approved Operational Dark palette reference at
+  `docs/color-palette.svg`.
 
 ### Changed
 
-- Updated Docker and Compose to run package modules, persist runtime data under
-  `/data`, and deploy without a mounted config file.
-- Switched the container web process from Flask's development server to Gunicorn.
-- Optimized dashboard log tail reads to avoid loading the entire log file.
-- Made monitor status writes atomic so the dashboard does not read partial JSON.
-- Expanded README documentation for the web interface and Pushover integration.
-- Moved install steps out of README and expanded INSTALL.md with command-line
-  Docker Compose deployment instructions.
+- Moved all operator-controlled behavior into validated Docker environment
+  variables synchronized across `.env.example`, Compose, and Swarm.
+- Changed application logging to human-readable stdout output for Docker and
+  added the configurable `INTERNET_MONITOR_LOG_LEVEL` setting.
+- Changed current dashboard state to an atomic, permission-restricted snapshot
+  inside the container's `/tmp` tmpfs.
+- Changed ping, gateway, system-resolver, and per-server DNS probes to run in one
+  concurrent monitoring cycle.
+- Changed Pushover rate-limit handling to queue messages instead of dropping
+  them, with configurable capped exponential retry backoff until delivery.
+- Changed the dashboard from full-page refreshes to same-origin JSON polling
+  while preserving a complete server-rendered initial view.
+- Hardened the container with an explicit unprivileged UID/GID, a read-only root
+  filesystem, dropped capabilities, and only `NET_RAW` added back for fping.
+- Added security headers and bounded status-file reads to the web dashboard.
+- Aligned package, image, deployment, and documentation version surfaces for
+  the 0.1.0 release.
 
-### Removed
+### Fixed
 
-- Removed `config.ini` and stale top-level script copies.
-- Removed the tracked runtime `connection.log` file.
-- Removed `install.sh`; deployment is handled by Docker stack tooling.
+- Removed persistent application log files, the Docker data volume, the web log
+  viewer, and the clear-log endpoint.
+- Fixed partial packet-loss handling so a reachable fping target is not treated as
+  a complete outage solely because fping returned a non-zero exit status.
+- Fixed health checks so a dashboard client allow-list cannot block the internal
+  Docker liveness endpoint.
+- Fixed DNS observability by distinguishing system-resolver failures, explicit
+  server failures, and slow server responses.
+- Fixed incomplete ping observability by capturing transmitted/received packets
+  and minimum, average, and maximum latency for every target.
+- Fixed cumulative DNS timeout delays by querying configured servers
+  concurrently.

@@ -1,44 +1,46 @@
 # Internet Monitor
 
-Dockerized Python monitor for internet reachability, packet loss, latency, DNS
-health, a small Flask log dashboard, and optional Pushover alerts.
+Internet Monitor 0.1.0 is a Docker-first Python service for Internet and gateway
+reachability, packet loss, latency, system DNS resolution, and direct DNS-server
+health checks.
+
+## Features
+
+- Concurrently checks primary, backup, and two optional gateway targets with
+  fping.
+- Uses the container resolver and concurrently runs `dig` against every
+  configured DNS server.
+- Diagnoses local gateway, upstream gateway, ISP/Internet, and DNS problems.
+- Displays a live Server → Gateway 1 → Gateway 2 → Internet topology, detailed
+  ping statistics, and browser-session latency charts.
+- Sends independent Pushover alerts for gateways and DNS servers, with queued
+  delivery retries and capped exponential backoff.
+- Writes human-readable application logs only to the Docker console.
+- Supports Docker Compose, Portainer, and a dedicated single-replica Swarm stack.
 
 ## Configuration
 
-All runtime configuration is set with Docker environment variables. Start from
-`.env.example`, then adjust hosts, intervals, alert thresholds, web settings, and
-optional Pushover values in your stack environment. `config.ini` is no longer
-used.
+All operator settings are Docker environment variables. Start with
+`.env.example`; the default DNS servers are `1.1.1.1` and `8.8.8.8`, and both
+query `INTERNET_MONITOR_DNS_HOST`.
 
-The primary ping host defaults to `1.1.1.1`; the backup ping host defaults to
-`8.8.8.8`. The backup host is checked when the primary result is failed,
-degraded, or high latency so a single remote host does not create false outage
-or packet-loss alerts.
+`INTERNET_MONITOR_GATEWAY_1_IP` and `INTERNET_MONITOR_GATEWAY_2_IP` are optional.
+When configured, each value must be a pingable IPv4 or IPv6 address representing
+the next device in order toward the Internet.
 
-Runtime log and status files are stored in the Docker volume mounted at `/data`.
-The Docker stack serves the dashboard with Gunicorn.
+No monitoring history or logs are persisted. The dashboard receives only the
+latest status through an ephemeral tmpfs snapshot. Browser charts begin when the
+page opens and reset with the page. Pushover credentials can be supplied through
+environment variables or Docker secrets.
 
-For deployment steps, see [INSTALL.md](INSTALL.md).
+For deployment and secret setup, see [INSTALL.md](INSTALL.md).
 
 ## Web Interface
 
-The web interface is available on the configured web port, `5005` by default. It
-shows current Internet and DNS status, auto-refreshes with the monitor interval,
-displays the most recent connection log lines, and includes a clear-log action.
-
-Use `INTERNET_MONITOR_WEB_ALLOWED_HOSTS` to restrict direct client IPs. Leave it
-blank to allow all clients that can reach the published Docker port.
-
-## Pushover Alerts
-
-Pushover notifications are optional and disabled until both
-`INTERNET_MONITOR_PUSHOVER_TOKEN` and `INTERNET_MONITOR_PUSHOVER_USER` are set in
-the stack environment. Optional settings include
-`INTERNET_MONITOR_PUSHOVER_DEVICE` and `INTERNET_MONITOR_PUSHOVER_PRIORITY`.
-
-Alerts cover outages, packet loss, high latency, DNS failures, and recovery
-events. Notifications that cannot be sent while connectivity is down are queued
-and retried after the monitor sees the connection recover.
+The dark dashboard is published on port `5005` by default. It polls the sanitized
+same-origin status endpoint at the monitor interval without reloading the page.
+`INTERNET_MONITOR_WEB_ALLOWED_HOSTS` can restrict direct client addresses;
+forwarded addresses are not trusted unless reverse-proxy support is added later.
 
 ## Development
 
@@ -46,6 +48,5 @@ and retried after the monitor sees the connection recover.
 python -m pip install -r requirements-dev.txt
 python -m pytest
 docker compose config
+docker stack config --compose-file docker-stack.yml
 ```
-
-The monitor requires `fping` and raw ICMP capability when run outside Docker.

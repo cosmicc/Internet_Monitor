@@ -2,4 +2,7 @@
 .pytest_cache/
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 connection.log
