@@ -1,33 +1,63 @@
-"""Docker healthcheck for the Internet Monitor web UI."""
+"""Lightweight Docker healthcheck for the Internet Monitor web UI."""
 
 from __future__ import annotations
 
+import http.client
+import os
 import sys
 
-import requests
 
-from .settings import ConfigurationError, load_settings
+DEFAULT_WEB_PORT = 5005
+HEALTHCHECK_TIMEOUT_SECONDS = 3
+
+
+def _web_port() -> int:
+    """Read only the bounded port needed by this short-lived process."""
+    raw_port = os.environ.get(
+        "WEB_PORT",
+        str(DEFAULT_WEB_PORT),
+    ).strip()
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise ValueError("WEB_PORT must be an integer.") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(
+            "WEB_PORT must be between 1 and 65535."
+        )
+    return port
 
 
 def main() -> None:
     """Exit 0 when the local Flask health endpoint returns HTTP 200."""
     try:
-        port = load_settings().web.port
-    except ConfigurationError as exc:
+        port = _web_port()
+    except ValueError as exc:
         print(f"Healthcheck configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    url = f"http://127.0.0.1:{port}/health"
-
+    connection = http.client.HTTPConnection(
+        "127.0.0.1",
+        port,
+        timeout=HEALTHCHECK_TIMEOUT_SECONDS,
+    )
     try:
-        response = requests.get(url, timeout=5)
-    except requests.RequestException as exc:
-        print(f"Healthcheck failed for {url}: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    if response.status_code != 200:
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        status_code = response.status
+        response.close()
+    except (OSError, http.client.HTTPException) as exc:
         print(
-            f"Healthcheck bad status {response.status_code} from {url}",
+            f"Healthcheck failed for local port {port}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    finally:
+        connection.close()
+
+    if status_code != 200:
+        print(
+            f"Healthcheck bad status {status_code} from local port {port}",
             file=sys.stderr,
         )
         sys.exit(1)

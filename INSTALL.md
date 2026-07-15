@@ -4,9 +4,9 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.1.2 image from GHCR. For
+The default Swarm deployment pulls the versioned 0.2.0 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
-override `INTERNET_MONITOR_IMAGE` with an image published under a test tag.
+override `IMAGE` with an image published under a test tag.
 
 ## Docker Compose
 
@@ -33,8 +33,8 @@ Open `http://<docker-host>:5005`, or the configured host port.
 Set either or both optional gateway variables in `.env` or the stack environment:
 
 ```dotenv
-INTERNET_MONITOR_GATEWAY_1_IP=192.0.2.1
-INTERNET_MONITOR_GATEWAY_2_IP=198.51.100.1
+GATEWAY_1_IP=192.0.2.1
+GATEWAY_2_IP=198.51.100.1
 ```
 
 Gateway 1 must be the closest pingable device to the monitoring server. Gateway
@@ -44,6 +44,23 @@ up as an upstream gateway issue, and an Internet-target outage while both
 gateways are up as an ISP or Internet issue. Leave a value blank to disable that
 hop.
 
+## Important Host Configuration
+
+Configure two or three priority hostnames to add them to the Important Hosts
+dashboard card and the normal ping alert lifecycle:
+
+```dotenv
+IMPORTANT_HOST_1=status.example.com
+IMPORTANT_HOST_2=api.example.com
+IMPORTANT_HOST_3=
+```
+
+The monitor starts these fping checks only when the system resolver succeeds and
+at least one server in `DNS_SERVERS` returns a usable response. When DNS is
+unavailable, the checks are marked as skipped on the web page; they do not add
+false packet-loss history or advance an outage alert. A slow but responding
+direct DNS server is sufficient because it can still resolve the hostname.
+
 ## Portainer With Docker Compose
 
 1. Create a stack from the Git repository.
@@ -52,14 +69,34 @@ hop.
 4. Deploy the stack and inspect its console logs.
 
 Compose builds the image from the repository. It grants only `NET_RAW`, runs as
-an unprivileged user, and stores current status and container-lifetime chart
-history in a 64 MiB tmpfs.
+an unprivileged user, and stores current status and bounded 30-day chart history
+in a 16 MiB tmpfs.
 
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.1.2`. Override
-`INTERNET_MONITOR_IMAGE` when testing another registry tag.
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.0`. Override
+`IMAGE` when testing another registry tag.
+
+From a Swarm manager, label the node that should normally run Internet Monitor:
+
+```bash
+docker node update --label-add internet-monitor=true <preferred-node>
+```
+
+The stack treats `internet-monitor` as a soft placement preference, not a hard
+constraint. Swarm therefore prefers an available node carrying the label but
+can reschedule the task onto another eligible node if the preferred node becomes
+unavailable. The ingress routing mesh keeps the published dashboard port
+reachable through any active Swarm node during that failover.
+
+Swarm does not automatically rebalance a healthy task merely because the
+preferred node later returns. After the preferred node is ready, explicitly
+reconcile the service if moving the monitor back is important:
+
+```bash
+docker service update --force internet-monitor_internet-monitor
+```
 
 Deploy without Pushover secrets:
 
@@ -103,21 +140,21 @@ docker stack deploy --with-registry-auth \
 ```
 
 The application reads the mounted files through
-`INTERNET_MONITOR_PUSHOVER_TOKEN_FILE` and
-`INTERNET_MONITOR_PUSHOVER_USER_FILE`. Secret files take precedence over direct
+`PUSHOVER_TOKEN_FILE` and
+`PUSHOVER_USER_FILE`. Secret files take precedence over direct
 environment values.
 
 Failed and rate-limited Pushover messages remain in an ordered in-memory queue.
-`INTERNET_MONITOR_PUSHOVER_RETRY_INITIAL_SECONDS` controls the first retry delay;
+`PUSHOVER_RETRY_INITIAL_SECONDS` controls the first retry delay;
 subsequent failures back off to
-`INTERNET_MONITOR_PUSHOVER_RETRY_MAX_SECONDS`. Delivery retries continue until
+`PUSHOVER_RETRY_MAX_SECONDS`. Delivery retries continue until
 successful while the container is running, but the queue intentionally does not
 survive a restart.
 
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.1.2`, to match the package
+The workflow requires the release tag, such as `v0.2.0`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.
@@ -131,22 +168,66 @@ docker compose logs -f
 docker service logs -f internet-monitor_internet-monitor
 ```
 
+Routine dashboard polling is intentionally excluded from the Gunicorn access
+log to avoid thousands of low-value log writes per day. Gunicorn errors and all
+monitoring events continue to use the Docker console. At the default `INFO`
+level, a sustained issue logs its first observation, alert transition, and
+recovery without repeating the same warning every monitoring cycle. Temporarily
+set `LOG_LEVEL=DEBUG` when per-cycle probe details are needed.
+
 There is no log volume or database to back up. The current dashboard state,
 alert counters, chart history, and queued Pushover messages reset when the
 container restarts or is redeployed. Reloading or reopening a browser restores
-the same container-scoped history. The default retention is:
+the most recently published container-scoped history. Retention is fixed at:
 
-- Detailed probe-cycle samples for 24 hours.
-- Minute summaries for 30 days.
-- Hourly summaries for the remaining lifetime of the container.
+- Detailed probe-cycle samples for 6 hours.
+- Minute summaries for 24 hours.
+- Hourly summaries for 30 days.
+- No history older than 30 days.
+
+The JSON snapshots are stored under `/tmp/internet-monitor` in the container's
+16 MiB tmpfs. They are compact, permission-restricted, and atomically replaced;
+history is published no more than once per minute. At 80% tmpfs usage the web
+page and Pushover report a warning. At 95% they report a critical condition.
+The web process checks the filesystem directly, so the alert remains visible
+even if a full tmpfs prevents the monitor from updating its snapshot.
+History publication pauses at the critical threshold while samples continue to
+be retained in memory. At zero available bytes, status publication also pauses.
+Both resume automatically after space is recovered.
 
 The dashboard downsamples long ranges while preserving the highest packet loss
-or DNS failure in each displayed interval. Retention and response point limits
-are configured by `INTERNET_MONITOR_HISTORY_DETAILED_HOURS`,
-`INTERNET_MONITOR_HISTORY_MINUTE_DAYS`, and
-`INTERNET_MONITOR_HISTORY_MAX_POINTS`. Keep `INTERNET_MONITOR_HISTORY_PATH` on
-the container tmpfs; pointing it at persistent storage changes the approved
-storage model.
+or DNS failure, weighted average latency, and minimum/maximum latency in each
+displayed interval. `HISTORY_MAX_POINTS` limits response and
+browser chart size. Keep `HISTORY_PATH` on the container tmpfs;
+pointing it at persistent storage changes the approved storage model.
+
+### Upgrading From 0.1.x To 0.2.0
+
+Version 0.2.0 is a clean configuration break. Every active variable has dropped
+the `INTERNET_MONITOR_` prefix, and the old names are intentionally ignored. Do
+not reuse a 0.1.x environment block unchanged. Start from the new `.env.example`
+or replace each name by removing the prefix, for example:
+
+```text
+INTERNET_MONITOR_PING_HOST -> PING_HOST
+INTERNET_MONITOR_DNS_SERVERS -> DNS_SERVERS
+INTERNET_MONITOR_WEB_PORT -> WEB_PORT
+INTERNET_MONITOR_PUSHOVER_TOKEN -> PUSHOVER_TOKEN
+```
+
+The retired `HISTORY_DETAILED_HOURS` and `HISTORY_MINUTE_DAYS` settings have no
+replacement because retention is fixed. The new `IMPORTANT_HOST_1` through
+`IMPORTANT_HOST_3` settings are optional.
+
+Version 0.2.0 also uses a new bounded history format. History is intentionally
+ephemeral, so redeploying starts a fresh 30-day window; there is no database or
+history migration to run.
+
+The updated stack reduces `/tmp` from 64 MiB to 16 MiB. Operators who want
+preferred Swarm placement should apply the `internet-monitor=true` node label
+before redeploying. Runtime configuration validation will reject excessive
+probe or web concurrency and an interval shorter than its configured probe
+window instead of allowing a permanently busy loop.
 
 ### DNS Works On The Host But Fails In The Swarm Task
 
@@ -175,7 +256,7 @@ docker exec "$MONITOR_TASK" \
   dig @"$DNS_SERVER_IP" "$QUERY_HOST" A +tcp +time=5 +tries=1
 ```
 
-Set `QUERY_HOST` to the configured `INTERNET_MONITOR_DNS_HOST` value before
+Set `QUERY_HOST` to the configured `DNS_HOST` value before
 testing.
 
 If both task queries time out while the node query succeeds, inspect packet flow

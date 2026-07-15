@@ -8,26 +8,24 @@
 
     const statusUrl = dashboard.dataset.statusUrl;
     const historyUrl = dashboard.dataset.historyUrl;
-    const validHistoryRanges = new Set(["1h", "6h", "24h", "7d", "all"]);
+    const validHistoryRanges = new Set(["1h", "6h", "24h", "30d"]);
     const historyRangeLabels = {
         "1h": "1 hour",
         "6h": "6 hours",
         "24h": "24 hours",
-        "7d": "7 days",
-        all: "container lifetime",
+        "30d": "30 days",
     };
     const historyAxisLabels = {
         "1h": "1 hour ago",
         "6h": "6 hours ago",
         "24h": "24 hours ago",
-        "7d": "7 days ago",
-        all: "Container start",
+        "30d": "30 days ago",
     };
     const historyRangeSeconds = {
         "1h": 60 * 60,
         "6h": 6 * 60 * 60,
         "24h": 24 * 60 * 60,
-        "7d": 7 * 24 * 60 * 60,
+        "30d": 30 * 24 * 60 * 60,
     };
     const refreshMilliseconds = Math.max(
         1000,
@@ -100,6 +98,12 @@
 
     function formatPercent(value) {
         return Number.isFinite(value) ? `${Number(value)}%` : "Unavailable";
+    }
+
+    function formatMebibytes(value) {
+        return Number.isFinite(value)
+            ? `${(Number(value) / (1024 * 1024)).toFixed(2)} MiB`
+            : "an unknown amount of space";
     }
 
     function formatPackets(transmitted, received) {
@@ -274,6 +278,9 @@
                 return {x, y};
             });
 
+            const cleanSegments = [];
+            const lossSegments = [];
+            const outageSegments = [];
             for (let index = 1; index < samples.length; index += 1) {
                 const previousCoordinate = coordinates[index - 1];
                 const coordinate = coordinates[index];
@@ -284,15 +291,24 @@
                     samples[index - 1].lossPercent > 0
                     || samples[index].lossPercent > 0
                 );
+                const segment = [
+                    `M ${previousCoordinate.x.toFixed(2)} ${previousCoordinate.y.toFixed(2)}`,
+                    `L ${coordinate.x.toFixed(2)} ${coordinate.y.toFixed(2)}`,
+                ].join(" ");
+                (hasFailure ? lossSegments : cleanSegments).push(segment);
+            }
+            if (cleanSegments.length > 0) {
                 latencyLayer.append(createSvgElement(
-                    "line",
-                    `chart-segment ${hasFailure ? "chart-segment-loss" : "chart-segment-clean"}`,
-                    {
-                        x1: previousCoordinate.x.toFixed(2),
-                        y1: previousCoordinate.y.toFixed(2),
-                        x2: coordinate.x.toFixed(2),
-                        y2: coordinate.y.toFixed(2),
-                    },
+                    "path",
+                    "chart-segment chart-segment-clean",
+                    {d: cleanSegments.join(" ")},
+                ));
+            }
+            if (lossSegments.length > 0) {
+                latencyLayer.append(createSvgElement(
+                    "path",
+                    "chart-segment chart-segment-loss",
+                    {d: lossSegments.join(" ")},
                 ));
             }
 
@@ -322,16 +338,10 @@
                     || coordinate.y === null
                 );
                 if (isTotalFailure) {
-                    lossLayer.append(createSvgElement(
-                        "line",
-                        "chart-loss-outage",
-                        {
-                            x1: coordinate.x.toFixed(2),
-                            y1: verticalPadding,
-                            x2: coordinate.x.toFixed(2),
-                            y2: height - verticalPadding,
-                        },
-                    ));
+                    outageSegments.push([
+                        `M ${coordinate.x.toFixed(2)} ${verticalPadding}`,
+                        `L ${coordinate.x.toFixed(2)} ${height - verticalPadding}`,
+                    ].join(" "));
                     return;
                 }
 
@@ -345,6 +355,13 @@
                     },
                 ));
             });
+            if (outageSegments.length > 0) {
+                lossLayer.prepend(createSvgElement(
+                    "path",
+                    "chart-loss-outage",
+                    {d: outageSegments.join(" ")},
+                ));
+            }
         });
     }
 
@@ -367,7 +384,7 @@
         });
         setText(
             "[data-history-caption]",
-            `Container history · ${historyRangeLabels[rangeName]}`,
+            `Retained history · ${historyRangeLabels[rangeName]}`,
         );
         setText("[data-history-axis-start]", historyAxisLabels[rangeName]);
     }
@@ -376,7 +393,7 @@
         const labels = {
             detailed: "detailed samples",
             minute: "minute summaries",
-            tiered: "tiered summaries",
+            hourly: "hourly summaries",
         };
         return labels[resolution] || "retained samples";
     }
@@ -388,14 +405,6 @@
             return;
         }
         chartEndTimestamp = endTimestamp;
-        if (rangeName === "all") {
-            chartStartTimestamp = Number.isFinite(historyStartedTimestamp)
-                ? historyStartedTimestamp
-                : endTimestamp;
-            setText("[data-history-axis-start]", "Container start");
-            return;
-        }
-
         const cutoff = endTimestamp - historyRangeSeconds[rangeName];
         const startsWithContainer = (
             Number.isFinite(historyStartedTimestamp)
@@ -414,7 +423,13 @@
         seriesByKey.clear();
         const metadata = Array.isArray(payload?.series) ? payload.series : [];
         const points = Array.isArray(payload?.points) ? payload.points : [];
-        historyStartedTimestamp = timestampToEpochSeconds(payload?.started_at);
+        const retainedStartCandidates = [
+            timestampToEpochSeconds(payload?.started_at),
+            timestampToEpochSeconds(points[0]?.[0]),
+        ].filter(Number.isFinite);
+        historyStartedTimestamp = retainedStartCandidates.length > 0
+            ? Math.min(...retainedStartCandidates)
+            : null;
         const updatedTimestamp = timestampToEpochSeconds(payload?.updated_at);
         updateChartWindow(activeHistoryRange, updatedTimestamp);
         metadata.forEach((series) => seriesByKey.set(series.id, []));
@@ -653,6 +668,77 @@
         );
     }
 
+    function updateImportantHosts(importantHosts, recordPoint, timestamp) {
+        const panel = dashboard.querySelector(".important-panel");
+        updateBadge(
+            panel?.querySelector(":scope > .section-heading [data-status-badge]"),
+            importantHosts.status,
+        );
+        const skipNotice = panel?.querySelector("[data-important-skip]");
+        if (skipNotice) {
+            skipNotice.hidden = !importantHosts.skipped;
+            if (importantHosts.skipped) {
+                skipNotice.textContent = importantHosts.skip_reason
+                    || "DNS is unavailable. Host checks are paused to avoid resolution delays.";
+            }
+        }
+
+        (importantHosts.hosts || []).forEach((host, index) => {
+            const row = panel?.querySelector(`[data-important-index="${index}"]`);
+            if (!row) {
+                return;
+            }
+            applyStatusClass(row, host.status);
+            updateBadge(row.querySelector("[data-status-badge]"), host.status);
+            setText("[data-important-host]", host.host || "Unavailable", row);
+            setText(
+                "[data-important-average]",
+                formatMilliseconds(host.average_latency_ms),
+                row,
+            );
+            setText(
+                "[data-important-loss]",
+                formatPercent(host.loss_percent),
+                row,
+            );
+            if (recordPoint && !importantHosts.skipped) {
+                appendSeriesPoint(
+                    `important-host-${index}`,
+                    timestamp,
+                    host.average_latency_ms,
+                    host.loss_percent,
+                );
+            }
+        });
+    }
+
+    function updateStorage(storage) {
+        const status = storage.status || {state: storage.state};
+        const state = normalizedStatus(status).state;
+        const alert = dashboard.querySelector("[data-storage-alert]");
+        applyStatusClass(alert, status);
+        if (alert) {
+            alert.hidden = state === "up";
+        }
+
+        const titles = {
+            warning: "Temporary storage is filling up",
+            down: "Temporary storage critically full",
+            unknown: "Temporary storage status unavailable",
+        };
+        setText("[data-storage-title]", titles[state] || "Temporary storage healthy", alert);
+        const detail = Number.isFinite(storage.used_percent)
+            ? `${Number(storage.used_percent).toFixed(2)}% used; ${formatMebibytes(storage.available_bytes)} remains. Monitoring history and status updates may stop if tmpfs fills.`
+            : "The filesystem holding monitoring history could not be measured.";
+        setText("[data-storage-detail]", detail, alert);
+        setText(
+            "[data-bind=\"storage-summary\"]",
+            Number.isFinite(storage.used_percent)
+                ? `${Number(storage.used_percent).toFixed(2)}% used`
+                : "Unavailable",
+        );
+    }
+
     function updateDiagnosis(diagnosis) {
         const banner = dashboard.querySelector("[data-diagnosis]");
         applyStatusClass(banner, diagnosis.status);
@@ -687,6 +773,12 @@
         );
         updateGateways(status.gateways || []);
         updateDns(status.dns || {}, recordPoint, status.last_updated);
+        updateImportantHosts(
+            status.important_hosts || {},
+            recordPoint,
+            status.last_updated,
+        );
+        updateStorage(status.storage || {});
 
         setText("[data-bind=\"last-updated\"]", formatDuration(status.snapshot_age_seconds));
         setText(

@@ -1,11 +1,25 @@
 """Tests for connectivity, dig, status, and notification helpers."""
 
 import json
+import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 from internet_monitor import monitor
 from internet_monitor.settings import MonitorSettings, PushoverSettings
+
+
+def test_repeated_probe_issue_details_move_to_debug(caplog):
+    """Only a new issue should create a normal-level per-cycle warning."""
+    with caplog.at_level(logging.DEBUG, logger="internet_monitor.monitor"):
+        monitor.log_probe_issue(1, "Probe failed: %s", "first")
+        monitor.log_probe_issue(2, "Probe failed: %s", "repeated")
+
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "Probe failed: first"),
+        ("DEBUG", "Probe failed: repeated"),
+    ]
 
 
 def test_parse_fping_output_extracts_latency_and_loss():
@@ -66,6 +80,36 @@ def test_write_status_uses_ephemeral_path_and_includes_dns_timings(tmp_path: Pat
     assert status_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_write_status_marks_dns_gated_important_hosts_as_skipped(tmp_path: Path):
+    """The browser snapshot should explain why hostname probes did not run."""
+    status_path = tmp_path / "status.json"
+    settings = MonitorSettings(
+        status_path=str(status_path),
+        important_hosts=("status.example.com",),
+    )
+    ping_result = monitor.PingResult(True, 12.5, 0, "", host="1.1.1.1")
+
+    monitor.write_status(
+        settings,
+        "up",
+        ping_result,
+        {"1.1.1.1": ping_result, "8.8.8.8": ping_result},
+        "down",
+        monitor.ResolverResult("down", 8.2),
+        [monitor.DnsQueryResult("1.1.1.1", "down", None)],
+        monitor.Diagnosis("warning", "DNS issue", "DNS is unavailable."),
+        123.45,
+        important_hosts_skipped=True,
+    )
+
+    important = json.loads(status_path.read_text(encoding="utf-8"))["important_hosts"]
+    assert important["state"] == "warning"
+    assert important["skipped"] is True
+    assert important["hosts"][0]["host"] == "status.example.com"
+    assert important["hosts"][0]["skipped"] is True
+    assert "DNS server" in important["skip_reason"]
+
+
 def test_run_ping_uses_backup_when_primary_reports_loss(monkeypatch):
     """A clean backup host should suppress a primary-host false positive."""
     calls = []
@@ -106,6 +150,7 @@ def test_run_ping_uses_backup_when_primary_reports_loss(monkeypatch):
     assert result.used_backup is True
     assert {command[-1] for command in calls} == {"1.1.1.1", "8.8.8.8"}
     assert all(command[1:7] == ["-c", "5", "-p", "1000", "-t", "1000"] for command in calls)
+    assert all(command[-2] == "--" for command in calls)
 
 
 def test_probe_cycle_collects_both_internet_targets_gateways_and_dns(monkeypatch):
@@ -130,7 +175,7 @@ def test_probe_cycle_collects_both_internet_targets_gateways_and_dns(monkeypatch
     monkeypatch.setattr(
         monitor,
         "check_system_resolver",
-        lambda hostname: monitor.ResolverResult("up", 3.0),
+        lambda hostname, timeout: monitor.ResolverResult("up", 3.0),
     )
     monkeypatch.setattr(monitor, "run_dig", fake_dig)
 
@@ -148,12 +193,127 @@ def test_probe_cycle_collects_both_internet_targets_gateways_and_dns(monkeypatch
     assert result.resolver_result.state == "up"
 
 
+def test_probe_cycle_skips_important_hosts_when_dns_is_unavailable(monkeypatch):
+    """DNS-gated hostnames must not create extra resolution delays during outages."""
+    settings = MonitorSettings(
+        important_hosts=("status.example.com", "api.example.com"),
+        dns_servers=("1.1.1.1", "8.8.8.8"),
+    )
+    ping_calls = []
+
+    def fake_ping(host, _settings):
+        ping_calls.append(host)
+        return monitor.PingResult(True, 1.0, 0, "", host=host)
+
+    monkeypatch.setattr(monitor, "_run_single_ping", fake_ping)
+    monkeypatch.setattr(
+        monitor,
+        "check_system_resolver",
+        lambda hostname, timeout: monitor.ResolverResult("down", 3.0),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "run_dig",
+        lambda server, _settings: monitor.DnsQueryResult(
+            server, "down", None, error="unavailable"
+        ),
+    )
+
+    result = monitor.run_probe_cycle(settings)
+
+    assert set(ping_calls) == {"1.1.1.1", "8.8.8.8"}
+    assert result.important_results == {}
+    assert result.important_hosts_skipped is True
+
+
+def test_probe_cycle_runs_important_hosts_with_one_working_dns_server(monkeypatch):
+    """One usable direct DNS path plus the system resolver should open the gate."""
+    settings = MonitorSettings(
+        important_hosts=("status.example.com", "api.example.com"),
+        dns_servers=("1.1.1.1", "8.8.8.8"),
+    )
+    ping_calls = []
+
+    def fake_ping(host, _settings):
+        ping_calls.append(host)
+        return monitor.PingResult(True, 1.0, 0, "", host=host)
+
+    monkeypatch.setattr(monitor, "_run_single_ping", fake_ping)
+    monkeypatch.setattr(
+        monitor,
+        "check_system_resolver",
+        lambda hostname, timeout: monitor.ResolverResult("up", 3.0),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "run_dig",
+        lambda server, _settings: monitor.DnsQueryResult(
+            server,
+            "warning" if server == "1.1.1.1" else "down",
+            600.0 if server == "1.1.1.1" else None,
+        ),
+    )
+
+    result = monitor.run_probe_cycle(settings)
+
+    assert set(ping_calls) == {
+        "1.1.1.1",
+        "8.8.8.8",
+        "status.example.com",
+        "api.example.com",
+    }
+    assert set(result.important_results) == {
+        "status.example.com",
+        "api.example.com",
+    }
+    assert result.important_hosts_skipped is False
+
+
+def test_important_hosts_start_before_a_slow_secondary_dns_check_finishes(
+    monkeypatch,
+):
+    """A usable DNS result should open the gate without waiting for every server."""
+    settings = MonitorSettings(
+        important_hosts=("status.example.com",),
+        dns_servers=("1.1.1.1", "8.8.8.8"),
+    )
+    important_started = threading.Event()
+    important_started_before_slow_dns_finished = []
+
+    def fake_ping(host, _settings):
+        if host == "status.example.com":
+            important_started.set()
+        return monitor.PingResult(True, 1.0, 0, "", host=host)
+
+    def fake_dig(server, _settings):
+        if server == "1.1.1.1":
+            return monitor.DnsQueryResult(server, "up", 2.0, "NOERROR", 1)
+        important_started_before_slow_dns_finished.append(
+            important_started.wait(timeout=0.5)
+        )
+        return monitor.DnsQueryResult(server, "down", None, error="timeout")
+
+    monkeypatch.setattr(monitor, "_run_single_ping", fake_ping)
+    monkeypatch.setattr(
+        monitor,
+        "check_system_resolver",
+        lambda hostname, timeout: monitor.ResolverResult("up", 3.0),
+    )
+    monkeypatch.setattr(monitor, "run_dig", fake_dig)
+
+    result = monitor.run_probe_cycle(settings)
+
+    assert important_started_before_slow_dns_finished == [True]
+    assert result.important_hosts_skipped is False
+
+
 def test_history_series_and_values_cover_every_dashboard_check():
     """Retained history should align gateways, targets, resolver, and DNS servers."""
     settings = MonitorSettings(
         gateway_1_ip="10.0.0.1",
         gateway_2_ip="203.0.113.1",
         dns_servers=("1.1.1.1", "8.8.8.8"),
+        important_hosts=("status.example.com",),
     )
     successful = lambda host, latency: monitor.PingResult(
         True,
@@ -189,6 +349,7 @@ def test_history_series_and_values_cover_every_dashboard_check():
             monitor.DnsQueryResult("1.1.1.1", "up", 8.0, "NOERROR", 1),
             monitor.DnsQueryResult("8.8.8.8", "down", None, error="timeout"),
         ],
+        {"status.example.com": successful("status.example.com", 20.0)},
     )
 
     assert [item.id for item in series] == [
@@ -200,12 +361,14 @@ def test_history_series_and_values_cover_every_dashboard_check():
         "dns-resolver",
         "dns-server-0",
         "dns-server-1",
+        "important-host-0",
     ]
     assert set(values) == {item.id for item in series}
     assert values["gateway-1"].average == 1.0
     assert values["internet-target-1"].loss == 100
     assert values["dns-server-1"].average is None
     assert values["dns-server-1"].loss == 100
+    assert values["important-host-0"].average == 20.0
 
 
 def test_run_dig_extracts_query_time_and_marks_slow_response(monkeypatch):
@@ -261,6 +424,23 @@ def test_run_dig_treats_servfail_as_down(monkeypatch):
     assert result.error == "DNS response status was SERVFAIL"
 
 
+def test_system_resolver_has_a_hard_subprocess_timeout(monkeypatch):
+    """A stalled NSS lookup should fail the cycle instead of blocking forever."""
+
+    def fake_run(command, capture_output, text, check, timeout):
+        assert command == ["getent", "ahosts", "www.google.com"]
+        assert timeout == 3
+        raise monitor.subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(monitor.subprocess, "run", fake_run)
+
+    result = monitor.check_system_resolver("www.google.com", 3)
+
+    assert result.state == "down"
+    assert result.response_time_ms is not None
+    assert result.error == "system resolver timed out after 3 seconds"
+
+
 class RecordingNotifier:
     """Minimal notifier test double that records alert titles and messages."""
 
@@ -269,6 +449,42 @@ class RecordingNotifier:
 
     def notify(self, title, message):
         self.notifications.append((title, message))
+
+
+def test_storage_alerts_warn_escalate_and_recover_once():
+    """Tmpfs transitions should appear in Pushover without repeated messages."""
+    notifier = RecordingNotifier()
+    state = monitor.update_storage_alert(
+        None,
+        monitor.StorageStatus("up", 10.0, 1024, 900),
+        notifier,
+    )
+    state = monitor.update_storage_alert(
+        state,
+        monitor.StorageStatus("warning", 80.0, 1024, 200),
+        notifier,
+    )
+    state = monitor.update_storage_alert(
+        state,
+        monitor.StorageStatus("warning", 85.0, 1024, 150),
+        notifier,
+    )
+    state = monitor.update_storage_alert(
+        state,
+        monitor.StorageStatus("down", 95.0, 1024, 50),
+        notifier,
+    )
+    monitor.update_storage_alert(
+        state,
+        monitor.StorageStatus("up", 25.0, 1024, 750),
+        notifier,
+    )
+
+    assert [title for title, _message in notifier.notifications] == [
+        "Temporary Storage Warning",
+        "Temporary Storage Critical",
+        "Temporary Storage Recovered",
+    ]
 
 
 def test_each_dns_server_tracker_sends_its_own_alert_and_recovery():
@@ -306,7 +522,7 @@ def test_each_dns_server_tracker_sends_its_own_alert_and_recovery():
 
 
 def test_flush_queue_keeps_failed_and_later_notifications():
-    """Queue retry should not drop notifications after the first retry failure."""
+    """Queue retry should deliver at most one message per monitor cycle."""
     notifier = monitor.PushoverNotifier(
         PushoverSettings(token="token", user="user"),
         max_alerts_per_hour=0,
@@ -316,10 +532,19 @@ def test_flush_queue_keeps_failed_and_later_notifications():
         monitor.QueuedNotification("failed", "message", monitor.utcnow()),
         monitor.QueuedNotification("later", "message", monitor.utcnow()),
     ]
-    notifier._send_http = lambda title, message: title == "sent"
+    attempted_titles = []
+
+    def send(title, message):
+        attempted_titles.append(title)
+        return title == "sent"
+
+    notifier._send_http = send
 
     notifier.flush_queue()
+    notifier._delivery_future.result(timeout=1)
+    notifier.flush_queue()
 
+    assert attempted_titles == ["sent"]
     assert [item.title for item in notifier.queue] == ["failed", "later"]
 
 
@@ -414,6 +639,8 @@ def test_pushover_retry_uses_backoff_until_delivery(monkeypatch):
 
     notifier._send_http = send
     notifier.notify("Outage", "message")
+    notifier._delivery_future.result(timeout=1)
+    notifier.flush_queue()
     assert len(notifier.queue) == 1
     assert notifier.queue[0].attempt_count == 1
 
@@ -421,8 +648,12 @@ def test_pushover_retry_uses_backoff_until_delivery(monkeypatch):
     assert len(attempts) == 1
     current_time[0] += monitor.timedelta(seconds=30)
     notifier.flush_queue()
+    notifier._delivery_future.result(timeout=1)
+    notifier.flush_queue()
     assert notifier.queue[0].attempt_count == 2
     current_time[0] += monitor.timedelta(seconds=60)
+    notifier.flush_queue()
+    notifier._delivery_future.result(timeout=1)
     notifier.flush_queue()
 
     assert len(attempts) == 3
@@ -438,6 +669,8 @@ def test_rate_limited_pushover_notification_is_queued(monkeypatch):
     monkeypatch.setattr(notifier, "_send_http", lambda title, message: True)
 
     notifier.notify("First", "message")
+    notifier._delivery_future.result(timeout=1)
+    notifier.flush_queue()
     notifier.notify("Second", "message")
 
     assert [item.title for item in notifier.queue] == ["Second"]

@@ -2,8 +2,8 @@
 """Run Internet, latency, packet-loss, resolver, and DNS-server checks.
 
 Human-readable events are written to the container console. Atomic current and
-tiered-history JSON snapshots in tmpfs allow the colocated web process to render
-live and container-lifetime results without durable storage.
+30-day tiered-history JSON snapshots in tmpfs allow the colocated web process to
+render live results without durable storage.
 """
 
 from __future__ import annotations
@@ -12,11 +12,10 @@ import json
 import logging
 import os
 import re
-import socket
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Optional
@@ -32,6 +31,7 @@ from .settings import (
     Settings,
     load_settings,
 )
+from .storage import StorageStatus, read_storage_status
 
 
 LOGGER = logging.getLogger("internet_monitor.monitor")
@@ -78,6 +78,16 @@ def format_duration(seconds: int) -> str:
             f"{remaining_seconds} second" + ("s" if remaining_seconds != 1 else "")
         )
     return ", ".join(parts)
+
+
+def log_probe_issue(
+    occurrence_count: int,
+    message: str,
+    *arguments: object,
+) -> None:
+    """Warn on a new issue, then keep repeated per-cycle details at debug."""
+    level = logging.WARNING if occurrence_count == 1 else logging.DEBUG
+    LOGGER.log(level, message, *arguments)
 
 
 @dataclass(frozen=True)
@@ -152,6 +162,7 @@ def _run_single_ping(host: str, settings: MonitorSettings) -> PingResult:
         str(settings.ping_period_ms),
         "-t",
         str(settings.ping_timeout_ms),
+        "--",
         host,
     ]
 
@@ -308,16 +319,41 @@ class ResolverResult:
     error: Optional[str] = None
 
 
-def check_system_resolver(hostname: str) -> ResolverResult:
-    """Resolve a hostname through the container resolver and measure elapsed time."""
+def check_system_resolver(
+    hostname: str,
+    timeout_seconds: int = 5,
+) -> ResolverResult:
+    """Resolve through NSS with a hard timeout so a cycle cannot hang."""
     started = time.monotonic()
     try:
-        socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
+        process = subprocess.run(
+            ["getent", "ahosts", hostname],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except FileNotFoundError:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        return ResolverResult("down", round(elapsed_ms, 2), "getent is not installed")
+    except subprocess.TimeoutExpired:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        return ResolverResult(
+            "down",
+            round(elapsed_ms, 2),
+            f"system resolver timed out after {timeout_seconds} seconds",
+        )
+    except OSError as exc:
         elapsed_ms = (time.monotonic() - started) * 1000
         return ResolverResult("down", round(elapsed_ms, 2), str(exc))
 
     elapsed_ms = (time.monotonic() - started) * 1000
+    if process.returncode != 0 or not process.stdout.strip():
+        return ResolverResult(
+            "down",
+            round(elapsed_ms, 2),
+            f"system resolver exited with code {process.returncode}",
+        )
     return ResolverResult("up", round(elapsed_ms, 2))
 
 
@@ -449,38 +485,108 @@ def run_ping_checks(settings: MonitorSettings) -> dict[str, PingResult]:
 
 @dataclass(frozen=True)
 class ProbeCycleResult:
-    """All Internet, gateway, resolver, and DNS observations for one cycle."""
+    """All network and DNS observations from one monitoring cycle."""
 
     ping_results: dict[str, PingResult]
     resolver_result: ResolverResult
     dns_results: list[DnsQueryResult]
+    important_results: dict[str, PingResult]
+    important_hosts_skipped: bool
 
 
-def run_probe_cycle(settings: MonitorSettings) -> ProbeCycleResult:
+def probe_worker_count(settings: MonitorSettings) -> int:
+    """Return the fixed worker count required by one concurrent probe cycle."""
+    return (
+        len(configured_ping_hosts(settings))
+        + len(settings.dns_servers)
+        + len(settings.important_hosts)
+        + 1
+    )
+
+
+def dns_can_resolve_important_hosts(
+    resolver_result: ResolverResult,
+    dns_results: list[DnsQueryResult],
+) -> bool:
+    """Require the system resolver and at least one direct DNS server."""
+    return resolver_result.state == "up" and any(
+        result.state in {"up", "warning"} for result in dns_results
+    )
+
+
+def run_probe_cycle(
+    settings: MonitorSettings,
+    executor: ThreadPoolExecutor | None = None,
+) -> ProbeCycleResult:
     """Collect every configured probe concurrently for a comparable snapshot."""
     ping_hosts = configured_ping_hosts(settings)
-    worker_count = len(ping_hosts) + len(settings.dns_servers) + 1
-
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+    owns_executor = executor is None
+    active_executor = executor or ThreadPoolExecutor(
+        max_workers=probe_worker_count(settings),
+        thread_name_prefix="internet-monitor-probe",
+    )
+    try:
         ping_futures = {
-            host: executor.submit(_run_single_ping, host, settings)
+            host: active_executor.submit(_run_single_ping, host, settings)
             for host in ping_hosts
         }
-        resolver_future = executor.submit(check_system_resolver, settings.dns_host)
+        resolver_future = active_executor.submit(
+            check_system_resolver,
+            settings.dns_host,
+            settings.dns_timeout_seconds,
+        )
         dns_futures = {
-            server: executor.submit(run_dig, server, settings)
+            server: active_executor.submit(run_dig, server, settings)
             for server in settings.dns_servers
         }
+
+        resolver_result = resolver_future.result()
+        important_futures = {}
+        dns_results_by_server: dict[str, DnsQueryResult] = {}
+        for completed_future in as_completed(dns_futures.values()):
+            dns_result = completed_future.result()
+            dns_results_by_server[dns_result.server] = dns_result
+            if (
+                settings.important_hosts
+                and not important_futures
+                and dns_can_resolve_important_hosts(
+                    resolver_result,
+                    list(dns_results_by_server.values()),
+                )
+            ):
+                # Start hostname pings as soon as one direct DNS path works.
+                # Slower DNS checks continue in parallel and remain part of the
+                # completed cycle snapshot.
+                important_futures = {
+                    host: active_executor.submit(_run_single_ping, host, settings)
+                    for host in settings.important_hosts
+                }
+
+        dns_results = [
+            dns_results_by_server[server] for server in settings.dns_servers
+        ]
+        important_hosts_skipped = bool(settings.important_hosts) and not (
+            important_futures
+        )
 
         ping_results = {
             host: ping_futures[host].result() for host in ping_hosts
         }
-        resolver_result = resolver_future.result()
-        dns_results = [
-            dns_futures[server].result() for server in settings.dns_servers
-        ]
-
-    return ProbeCycleResult(ping_results, resolver_result, dns_results)
+        important_results = {
+            host: important_futures[host].result()
+            for host in settings.important_hosts
+            if host in important_futures
+        }
+    finally:
+        if owns_executor:
+            active_executor.shutdown(wait=True, cancel_futures=True)
+    return ProbeCycleResult(
+        ping_results,
+        resolver_result,
+        dns_results,
+        important_results,
+        important_hosts_skipped,
+    )
 
 
 def determine_dns_state(
@@ -652,6 +758,15 @@ def build_history_series(settings: MonitorSettings) -> list[HistorySeries]:
         )
         for index, server in enumerate(settings.dns_servers)
     )
+    series.extend(
+        HistorySeries(
+            f"important-host-{index}",
+            f"Important Host {index + 1}",
+            "ping",
+            host,
+        )
+        for index, host in enumerate(settings.important_hosts)
+    )
     return series
 
 
@@ -674,6 +789,7 @@ def build_history_values(
     ping_results: dict[str, PingResult],
     resolver_result: ResolverResult,
     dns_results: list[DnsQueryResult],
+    important_results: dict[str, PingResult] | None = None,
 ) -> dict[str, HistoryValue]:
     """Build one aligned history observation from a completed probe cycle."""
     values: dict[str, HistoryValue] = {
@@ -700,7 +816,29 @@ def build_history_values(
             average=result.response_time_ms,
             loss=100.0 if result.state == "down" else 0.0,
         )
+    for index, host in enumerate(settings.important_hosts):
+        result = (important_results or {}).get(host)
+        if result is not None:
+            values[f"important-host-{index}"] = _ping_history_value(result)
     return values
+
+
+def determine_important_hosts_state(
+    settings: MonitorSettings,
+    results: dict[str, PingResult],
+    skipped: bool,
+) -> str:
+    """Summarize configured important-host checks without false DNS failures."""
+    if not settings.important_hosts:
+        return "unknown"
+    if skipped:
+        return "warning"
+    states = [determine_ping_state(results[host], settings) for host in settings.important_hosts]
+    if all(state == "down" for state in states):
+        return "down"
+    if any(state != "up" for state in states):
+        return "warning"
+    return "up"
 
 
 def write_status(
@@ -714,6 +852,9 @@ def write_status(
     diagnosis: Diagnosis,
     loop_duration_ms: float,
     snapshot_time: datetime | None = None,
+    *,
+    important_results: dict[str, PingResult] | None = None,
+    important_hosts_skipped: bool = False,
 ) -> None:
     """Atomically write the latest non-persistent dashboard snapshot."""
     internet_targets: list[dict[str, object]] = []
@@ -744,6 +885,26 @@ def write_status(
             }
         gateway_snapshot["position"] = position
         gateway_snapshots.append(gateway_snapshot)
+
+    important_snapshots: list[dict[str, object]] = []
+    for host in settings.important_hosts:
+        result = (important_results or {}).get(host)
+        if result is None:
+            important_snapshot: dict[str, object] = {
+                "state": "unknown",
+                "host": host,
+                "minimum_latency_ms": None,
+                "average_latency_ms": None,
+                "maximum_latency_ms": None,
+                "loss_percent": None,
+                "transmitted": None,
+                "received": None,
+                "skipped": important_hosts_skipped,
+            }
+        else:
+            important_snapshot = _ping_snapshot(result, settings)
+            important_snapshot["skipped"] = False
+        important_snapshots.append(important_snapshot)
 
     data = {
         "timestamp": (snapshot_time or utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -786,6 +947,20 @@ def write_status(
                 }
                 for result in dns_results
             ],
+        },
+        "important_hosts": {
+            "state": determine_important_hosts_state(
+                settings,
+                important_results or {},
+                important_hosts_skipped,
+            ),
+            "skipped": important_hosts_skipped,
+            "skip_reason": (
+                "System DNS and at least one configured DNS server must be available."
+                if important_hosts_skipped
+                else ""
+            ),
+            "hosts": important_snapshots,
         },
     }
 
@@ -837,6 +1012,16 @@ class PushoverNotifier:
         self.queue: list[QueuedNotification] = []
         self.alert_history: list[datetime] = []
         self.enabled = bool(self.token and self.user)
+        self._delivery_executor = (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="internet-monitor-pushover",
+            )
+            if self.enabled
+            else None
+        )
+        self._delivery_future: Future[bool] | None = None
+        self._delivery_notification: QueuedNotification | None = None
 
         if not self.enabled:
             LOGGER.info("Pushover is disabled because no complete credentials are configured.")
@@ -886,8 +1071,8 @@ class PushoverNotifier:
                 next_attempt_at=next_attempt_at,
             )
         )
-        LOGGER.warning(
-            "Queued Pushover notification %r in memory (queue_size=%s).",
+        LOGGER.debug(
+            "Enqueued Pushover notification %r in memory (queue_size=%s).",
             title,
             len(self.queue),
         )
@@ -935,60 +1120,44 @@ class PushoverNotifier:
         return True
 
     def notify(self, title: str, message: str) -> None:
-        """Send a notification or retain it in memory when delivery fails."""
+        """Queue a notification for non-blocking ordered delivery."""
         if not self.enabled:
             LOGGER.info("Pushover disabled; notification %r was not sent.", title)
             return
-        if self.queue:
-            self._queue_notification(title, message)
-            return
+        next_attempt_at: datetime | None = None
         if self._is_rate_limited():
             LOGGER.warning(
                 "Alert rate limit reached (%s/hour); queueing %r.",
                 self.max_alerts_per_hour,
                 title,
             )
-            self._queue_notification(
-                title,
-                message,
-                next_attempt_at=self._rate_limit_release_time(),
-            )
-            return
-
-        if self._send_http(title, message):
-            if self.max_alerts_per_hour > 0:
-                self.alert_history.append(utcnow())
-            return
-
+            next_attempt_at = self._rate_limit_release_time()
         self._queue_notification(
             title,
             message,
-            attempt_count=1,
-            next_attempt_at=utcnow()
-            + timedelta(seconds=self._retry_delay(attempt_count=1)),
+            next_attempt_at=next_attempt_at,
         )
+        self.flush_queue()
 
     def flush_queue(self) -> None:
-        """Retry due messages in order with rate limiting and bounded backoff."""
-        if not self.enabled or not self.queue:
+        """Advance one non-blocking ordered delivery without delaying probes."""
+        if not self.enabled or self._delivery_executor is None:
             return
 
-        while self.queue:
-            notification = self.queue[0]
-            now = utcnow()
-            if (
-                notification.next_attempt_at is not None
-                and now < notification.next_attempt_at
-            ):
+        if self._delivery_future is not None:
+            if not self._delivery_future.done():
                 return
-            if self._is_rate_limited():
-                self.queue[0] = replace(
-                    notification,
-                    next_attempt_at=self._rate_limit_release_time(),
-                )
+            notification = self._delivery_notification
+            try:
+                delivered = self._delivery_future.result()
+            except Exception:
+                LOGGER.exception("Unexpected Pushover delivery worker failure.")
+                delivered = False
+            self._delivery_future = None
+            self._delivery_notification = None
+            if notification is None or not self.queue:
                 return
-
-            if self._send_http(notification.title, notification.message):
+            if delivered:
                 if self.max_alerts_per_hour > 0:
                     self.alert_history.append(utcnow())
                 age = int((utcnow() - notification.queued_at).total_seconds())
@@ -998,8 +1167,7 @@ class PushoverNotifier:
                     format_duration(age),
                 )
                 self.queue.pop(0)
-                continue
-
+                return
             attempt_count = notification.attempt_count + 1
             delay_seconds = self._retry_delay(attempt_count)
             self.queue[0] = replace(
@@ -1013,6 +1181,77 @@ class PushoverNotifier:
                 format_duration(delay_seconds),
             )
             return
+
+        if not self.queue:
+            return
+        notification = self.queue[0]
+        now = utcnow()
+        if (
+            notification.next_attempt_at is not None
+            and now < notification.next_attempt_at
+        ):
+            return
+        if self._is_rate_limited():
+            self.queue[0] = replace(
+                notification,
+                next_attempt_at=self._rate_limit_release_time(),
+            )
+            return
+
+        self._delivery_notification = notification
+        self._delivery_future = self._delivery_executor.submit(
+            self._send_http,
+            notification.title,
+            notification.message,
+        )
+
+
+def _format_mebibytes(byte_count: int | None) -> str:
+    """Format a storage byte count without unnecessary precision."""
+    if byte_count is None:
+        return "an unknown amount of space"
+    return f"{byte_count / (1024 * 1024):.2f} MiB"
+
+
+def update_storage_alert(
+    previous_state: str | None,
+    status: StorageStatus,
+    notifier: PushoverNotifier,
+) -> str:
+    """Notify once for tmpfs warning, critical, unknown, and recovery changes."""
+    if status.state == previous_state:
+        return status.state
+
+    if status.state == "warning":
+        message = (
+            f"Ephemeral monitoring storage is {status.used_percent:.2f}% used; "
+            f"{_format_mebibytes(status.available_bytes)} remains. Status and "
+            "history writes may fail if usage continues to increase."
+        )
+        notifier.notify("Temporary Storage Warning", message)
+        LOGGER.warning(message)
+    elif status.state == "down":
+        message = (
+            f"Ephemeral monitoring storage is critically full at "
+            f"{status.used_percent:.2f}% used; "
+            f"{_format_mebibytes(status.available_bytes)} remains."
+        )
+        notifier.notify("Temporary Storage Critical", message)
+        LOGGER.error(message)
+    elif status.state == "unknown":
+        message = "Unable to measure ephemeral monitoring storage capacity."
+        notifier.notify("Temporary Storage Check Failed", message)
+        LOGGER.error(message)
+    elif previous_state in {"warning", "down", "unknown"}:
+        message = (
+            f"Ephemeral monitoring storage recovered to "
+            f"{status.used_percent:.2f}% used with "
+            f"{_format_mebibytes(status.available_bytes)} available."
+        )
+        notifier.notify("Temporary Storage Recovered", message)
+        LOGGER.info(message)
+
+    return status.state
 
 
 @dataclass
@@ -1060,7 +1299,8 @@ def update_resolver_tracker(
     tracker.issue_kind = "failure"
     if tracker.started_at is None:
         tracker.started_at = utcnow()
-    LOGGER.warning(
+    log_probe_issue(
+        tracker.count,
         "System resolver failed for %s (%s/%s).",
         settings.dns_host,
         tracker.count,
@@ -1085,7 +1325,7 @@ def update_dns_server_tracker(
 ) -> None:
     """Update the independent alert state for one configured DNS server."""
     if result.state == "up":
-        LOGGER.info(
+        LOGGER.debug(
             "DNS server %s answered %s %s in %.2f ms.",
             result.server,
             settings.dns_host,
@@ -1110,7 +1350,8 @@ def update_dns_server_tracker(
     tracker.issue_kind = "slow" if result.state == "warning" else "failure"
 
     if result.state == "warning":
-        LOGGER.warning(
+        log_probe_issue(
+            tracker.count,
             "DNS server %s was slow: %.2f ms exceeds %.2f ms (%s/%s).",
             result.server,
             result.response_time_ms or 0.0,
@@ -1119,7 +1360,8 @@ def update_dns_server_tracker(
             settings.dns_failure_trigger,
         )
     else:
-        LOGGER.warning(
+        log_probe_issue(
+            tracker.count,
             "DNS server %s failed for %s (%s/%s): %s.",
             result.server,
             settings.dns_host,
@@ -1222,7 +1464,8 @@ def update_gateway_tracker(
             f"{format_duration(int(duration_seconds))}."
         )
 
-    LOGGER.warning(
+    log_probe_issue(
+        tracker.count,
         "%s is %s (%s/%s), duration=%.1fs.",
         label,
         issue_kind.replace("_", " "),
@@ -1247,8 +1490,6 @@ def run_monitor(settings: Settings) -> None:
     history_store = HistoryStore(
         monitor.history_path,
         build_history_series(monitor),
-        detailed_hours=monitor.history_detailed_hours,
-        minute_days=monitor.history_minute_days,
         started_at=utcnow(),
     )
 
@@ -1276,11 +1517,15 @@ def run_monitor(settings: Settings) -> None:
         )
         if host
     }
+    important_host_trackers = {
+        host: IssueTracker() for host in monitor.important_hosts
+    }
+    storage_alert_state: str | None = None
 
     LOGGER.info(
         "Starting Internet Monitor: interval=%ss ping_hosts=%s gateways=%s "
-        "dns_host=%s dns_servers=%s slow_dns_threshold_ms=%.2f "
-        "history_detailed_hours=%s history_minute_days=%s",
+        "dns_host=%s dns_servers=%s important_hosts=%s "
+        "slow_dns_threshold_ms=%.2f",
         monitor.interval,
         ",".join(
             host
@@ -1293,14 +1538,17 @@ def run_monitor(settings: Settings) -> None:
         or "not configured",
         monitor.dns_host,
         ",".join(monitor.dns_servers),
+        ",".join(monitor.important_hosts) or "not configured",
         monitor.dns_slow_threshold_ms,
-        monitor.history_detailed_hours,
-        monitor.history_minute_days,
     )
 
+    probe_executor = ThreadPoolExecutor(
+        max_workers=probe_worker_count(monitor),
+        thread_name_prefix="internet-monitor-probe",
+    )
     while True:
         loop_started = time.monotonic()
-        probe_cycle = run_probe_cycle(monitor)
+        probe_cycle = run_probe_cycle(monitor, probe_executor)
         if any(
             result.error == "fping is not installed"
             for result in probe_cycle.ping_results.values()
@@ -1316,6 +1564,7 @@ def run_monitor(settings: Settings) -> None:
         ping_result = select_internet_result(monitor, ping_results)
         resolver_result = probe_cycle.resolver_result
         dns_results = probe_cycle.dns_results
+        important_results = probe_cycle.important_results
 
         connectivity_up = ping_result.success
         if connectivity_up:
@@ -1335,7 +1584,8 @@ def run_monitor(settings: Settings) -> None:
             ping_fail_count += 1
             outage_start = outage_start or utcnow()
             outage_duration = (utcnow() - outage_start).total_seconds()
-            LOGGER.warning(
+            log_probe_issue(
+                ping_fail_count,
                 "Ping check failed for %s (%s/%s), duration=%.1fs.",
                 ping_result.host or monitor.ping_host,
                 ping_fail_count,
@@ -1364,7 +1614,8 @@ def run_monitor(settings: Settings) -> None:
                 loss_iter_count += 1
                 loss_start = loss_start or utcnow()
                 loss_duration = (utcnow() - loss_start).total_seconds()
-                LOGGER.warning(
+                log_probe_issue(
+                    loss_iter_count,
                     "Packet loss is %s%% to %s (count=%s duration=%.1fs).",
                     loss,
                     ping_host,
@@ -1400,7 +1651,8 @@ def run_monitor(settings: Settings) -> None:
                 latency_iter_count += 1
                 latency_start = latency_start or utcnow()
                 latency_duration = (utcnow() - latency_start).total_seconds()
-                LOGGER.warning(
+                log_probe_issue(
+                    latency_iter_count,
                     "High latency is %.2f ms to %s (count=%s duration=%.1fs).",
                     latency,
                     ping_host,
@@ -1459,12 +1711,27 @@ def run_monitor(settings: Settings) -> None:
                 monitor,
                 notifier,
             )
+        if not probe_cycle.important_hosts_skipped:
+            for host, result in important_results.items():
+                update_gateway_tracker(
+                    important_host_trackers[host],
+                    f"Important host {host}",
+                    result,
+                    monitor,
+                    notifier,
+                )
         dns_state = determine_dns_state(resolver_result, dns_results)
         diagnosis = determine_connection_diagnosis(
             monitor,
             ping_results,
             internet_state,
             dns_state,
+        )
+        storage_status = read_storage_status(monitor.history_path)
+        storage_alert_state = update_storage_alert(
+            storage_alert_state,
+            storage_status,
+            notifier,
         )
         notifier.flush_queue()
 
@@ -1479,21 +1746,30 @@ def run_monitor(settings: Settings) -> None:
                 ping_results,
                 resolver_result,
                 dns_results,
+                important_results,
             ),
+            publish_snapshot=storage_status.state != "down",
         )
 
-        write_status(
-            monitor,
-            internet_state,
-            ping_result,
-            ping_results,
-            dns_state,
-            resolver_result,
-            dns_results,
-            diagnosis,
-            elapsed * 1000,
-            snapshot_time,
-        )
+        if storage_status.available_bytes != 0:
+            write_status(
+                monitor,
+                internet_state,
+                ping_result,
+                ping_results,
+                dns_state,
+                resolver_result,
+                dns_results,
+                diagnosis,
+                elapsed * 1000,
+                snapshot_time,
+                important_results=important_results,
+                important_hosts_skipped=probe_cycle.important_hosts_skipped,
+            )
+        else:
+            LOGGER.debug(
+                "Skipping status snapshot because no temporary storage is available."
+            )
 
         elapsed = time.monotonic() - loop_started
         sleep_seconds = max(0.0, monitor.interval - elapsed)

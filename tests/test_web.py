@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from internet_monitor.history import HistorySeries, HistoryStore, HistoryValue
 from internet_monitor.settings import (
     MonitorSettings,
@@ -11,10 +13,11 @@ from internet_monitor.settings import (
     Settings,
     WebSettings,
 )
+from internet_monitor.storage import StorageStatus
 from internet_monitor.web import create_app
 
 
-def _settings(tmp_path: Path, *, allowed_hosts=()):
+def _settings(tmp_path: Path, *, allowed_hosts=(), important_hosts=()):
     """Build isolated app settings backed by an ephemeral snapshot path."""
     status_path = tmp_path / "status.json"
     history_path = tmp_path / "history.json"
@@ -26,6 +29,7 @@ def _settings(tmp_path: Path, *, allowed_hosts=()):
             gateway_1_ip="10.0.0.1",
             gateway_2_ip="203.0.113.1",
             dns_servers=("1.1.1.1", "8.8.8.8"),
+            important_hosts=important_hosts,
         ),
         web=WebSettings(
             title="Test Monitor",
@@ -157,6 +161,10 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"data-loss-series" in response.data
     assert b"Monitoring History" in response.data
     assert b'data-history-range="24h"' in response.data
+    assert b'data-history-range="30d"' in response.data
+    assert b'data-history-range="7d"' not in response.data
+    assert b'data-history-range="all"' not in response.data
+    assert b">All</button>" not in response.data
     assert b'data-sparkline="internet-target-0"' in response.data
     assert b'data-sparkline="dns-server-0"' in response.data
     assert b"Packet loss" in response.data
@@ -198,6 +206,85 @@ def test_missing_snapshot_renders_configured_targets_as_unknown(tmp_path: Path):
     assert b"203.0.113.1" in response.data
     assert b"1.1.1.1" in response.data
     assert b"8.8.8.8" in response.data
+
+
+def test_tmpfs_alert_and_dns_gated_important_hosts_render_on_web(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """The live page and API should expose capacity pressure and skipped hosts."""
+    settings = _settings(
+        tmp_path,
+        important_hosts=("status.example.com", "api.example.com"),
+    )
+    Path(settings.monitor.status_path).write_text(
+        json.dumps(
+            {
+                "timestamp": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "interval_seconds": 15,
+                "loop_duration_ms": 100,
+                "diagnosis": {
+                    "state": "warning",
+                    "title": "DNS issue",
+                    "detail": "Configured DNS paths are unavailable.",
+                },
+                "internet": {
+                    "state": "up",
+                    "host": "1.1.1.1",
+                    "average_latency_ms": 10,
+                    "loss_percent": 0,
+                    "targets": [],
+                },
+                "dns": {
+                    "state": "down",
+                    "hostname": "www.google.com",
+                    "record_type": "A",
+                    "slow_threshold_ms": 500,
+                    "resolver": {"state": "down", "response_time_ms": 5},
+                    "servers": [],
+                },
+                "important_hosts": {
+                    "state": "warning",
+                    "skipped": True,
+                    "skip_reason": (
+                        "System DNS and at least one configured DNS server "
+                        "must be available."
+                    ),
+                    "hosts": [
+                        {"host": "status.example.com", "state": "unknown"},
+                        {"host": "api.example.com", "state": "unknown"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "internet_monitor.web.read_storage_status",
+        lambda path: StorageStatus(
+            "warning",
+            85.0,
+            16 * 1024 * 1024,
+            2 * 1024 * 1024,
+        ),
+    )
+    client = create_app(settings).test_client()
+
+    response = client.get("/")
+    api_data = client.get("/api/status").get_json()
+
+    assert response.status_code == 200
+    assert b"Important Hosts" in response.data
+    assert b"status.example.com" in response.data
+    assert b"api.example.com" in response.data
+    assert b"DNS unavailable" in response.data
+    assert b"Temporary storage is filling up" in response.data
+    assert b"85.00% used" in response.data
+    assert api_data["storage"]["state"] == "warning"
+    assert api_data["important_hosts"]["skipped"] is True
+    assert api_data["important_hosts"]["hosts"][0]["status"]["text"] == "Skipped"
 
 
 def test_allowed_hosts_blocks_dashboard_but_not_local_health_check(tmp_path: Path):
@@ -246,10 +333,11 @@ def test_history_api_serves_sanitized_container_history(tmp_path: Path):
     assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_history_api_rejects_unsupported_ranges(tmp_path: Path):
+@pytest.mark.parametrize("range_name", ["7d", "all", "forever"])
+def test_history_api_rejects_unsupported_ranges(tmp_path: Path, range_name: str):
     """History range input should be constrained to the explicit allow-list."""
     response = create_app(_settings(tmp_path)).test_client().get(
-        "/api/history?range=forever"
+        f"/api/history?range={range_name}"
     )
 
     assert response.status_code == 400

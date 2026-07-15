@@ -8,10 +8,13 @@ Internet Monitor is a Docker-first Python service. Application code lives in
 - `settings.py` validates all operator-controlled environment variables and
   Docker secret-file inputs.
 - `monitor.py` runs the concurrent fping, gateway, system resolver, and
-  per-server dig cycle, alert tracking, Pushover retry queue, console logging,
-  path diagnosis, and ephemeral status updates.
+  per-server dig cycle, DNS-gated important-host pings, alert tracking,
+  Pushover retry queue, console logging, path diagnosis, and ephemeral status
+  updates.
 - `history.py` keeps loss-preserving detailed, minute, and hourly monitoring
   history in a compact, permission-restricted tmpfs snapshot.
+- `storage.py` measures the filesystem holding runtime snapshots and applies the
+  fixed temporary-storage warning and critical thresholds.
 - `web.py` exposes the Flask status dashboard, sanitized live status and history
   endpoints, and health endpoint.
 - `healthcheck.py` is the Docker health-check entry point.
@@ -24,20 +27,39 @@ operator-tunable setting in Docker environment variables and update
 `.env.example`, `docker-compose.yml`, and `docker-stack.yml` together whenever
 the environment contract changes.
 
+Version 0.2.0 is a clean configuration break. Active environment variable names
+must not use the retired `INTERNET_MONITOR_` prefix, and no compatibility aliases
+may restore prefixed names without explicit approval and migration documentation.
+
 ## Runtime State And Logging
 
 Application logs must go only to stdout or stderr for Docker collection. Do not
-add application log files or a web log viewer.
+add application log files or a web log viewer. Keep routine Gunicorn access
+logging disabled so dashboard polling does not generate continuous log churn;
+Gunicorn errors and monitor events remain console-visible. At normal log levels,
+log a probe issue when it begins and when its alert/recovery state changes; keep
+repeated per-cycle details at debug level.
 
 The web and monitor processes share current status at
-`/tmp/internet-monitor/status.json` and container-lifetime chart history at
-`/tmp/internet-monitor/history.json`. Compose and Swarm mount `/tmp` as a 64 MiB
-tmpfs, so neither file is durable storage. Detailed samples are retained for 24
-hours by default, minute summaries for 30 days, and hourly summaries for the
-remaining container lifetime. Downsampling must preserve maximum loss or DNS
-failure values. Alert counters, the ordered Pushover retry queue, status, and
-history all reset on container restart or redeploy; a browser reload must not
-clear history.
+`/tmp/internet-monitor/status.json` and 30-day chart history at
+`/tmp/internet-monitor/history.json`. Compose and Swarm mount `/tmp` as a 16 MiB
+tmpfs, so neither file is durable storage. Keep exact probe samples for 6 hours,
+minute summaries for 24 hours, and hourly summaries for 30 days. Nothing older
+than 30 days may remain. Downsampling and aggregation must preserve maximum loss
+or DNS failure values, weighted latency averages, and minimum/maximum latency.
+Collect every probe in memory, but publish the complete atomic history snapshot
+at most once per minute instead of after every probe. Alert counters, the ordered
+Pushover retry queue, status, and history all reset on container restart or
+redeploy; a browser reload must not clear published history.
+
+Measure the filesystem holding `HISTORY_PATH` every monitor cycle and again when
+serving dashboard status. A usage level of 80% is warning and 95% is critical.
+The monitor must emit one Pushover notification per warning, critical, unknown,
+or recovery transition. The web process must measure storage independently so a
+full tmpfs remains visible even when the monitor cannot replace its JSON files.
+At critical usage, retain observations in memory but pause atomic history
+publication; when no bytes remain, skip status publication too. Both must resume
+without restart after storage recovers.
 
 Internet Monitor currently requires no long-term storage. Stop and ask the user
 before adding PostgreSQL or any other persistent store.
@@ -46,13 +68,21 @@ before adding PostgreSQL or any other persistent store.
 
 Preserve both DNS layers:
 
-1. The system resolver checks `INTERNET_MONITOR_DNS_HOST`.
+1. The system resolver checks `DNS_HOST` through a bounded
+   `getent ahosts` subprocess so NSS resolution cannot block a monitor cycle.
 2. `dig` queries that host against every IP in
-   `INTERNET_MONITOR_DNS_SERVERS` and records the latest response time.
+   `DNS_SERVERS` and records the latest response time.
 
 Each explicit DNS server has an independent failure/slow-response alert and
 recovery lifecycle. Keep the slow threshold environment-controlled and never
 construct a shell command from DNS settings.
+
+`IMPORTANT_HOST_1`, `IMPORTANT_HOST_2`, and `IMPORTANT_HOST_3` are optional,
+de-duplicated fping targets. Run them only when the system resolver is healthy
+and at least one direct DNS server is healthy or slow-but-responding. A DNS-gated
+skip must be visible on the dashboard, must not add a failed history sample, and
+must not advance or clear an important-host alert tracker. When checks run, each
+host uses the existing ping degradation, outage, and recovery alert lifecycle.
 
 DNS health is intentionally measured from the monitor task's network namespace.
 If a query succeeds on the Swarm node but `dig` exits with code 9 in the task,
@@ -67,7 +97,7 @@ nodes when traffic remains inside a shared overlay.
 
 ## Gateway And Internet Monitoring
 
-`INTERNET_MONITOR_GATEWAY_1_IP` and `INTERNET_MONITOR_GATEWAY_2_IP` are optional
+`GATEWAY_1_IP` and `GATEWAY_2_IP` are optional
 validated IP addresses. When present, they are ordered from the monitoring
 server toward the Internet. Probe both gateways and both Internet targets every
 cycle so dashboard values remain comparable.
@@ -106,6 +136,12 @@ docker stack config --compose-file docker-stack.yml --compose-file docker-stack.
 single-replica, ingress-published, and registry-image based. Stop-first updates
 prevent duplicate monitoring and notifications.
 
+The Swarm service uses a soft `node.labels.internet-monitor` placement
+preference. Keep this as a preference rather than a constraint so Swarm can
+reschedule the single task onto an eligible unlabeled node when no labeled node
+is available. Do not make the label mandatory unless the loss of automatic
+fallback is explicitly requested.
+
 The container runs as UID/GID 10001, has a read-only root filesystem, drops all
 default capabilities, and adds back only `NET_RAW` for fping. Do not add broader
 privileges. Do not add `no-new-privileges` without retesting fping: the packaged
@@ -130,10 +166,11 @@ consistent with those colors and maintain uniform spacing.
 
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` and `/api/history` endpoints. History ranges
-are restricted to 1h, 6h, 24h, 7d, and All. Render ping loss and DNS failures in
-the approved failure red, and do not turn a total failure into a zero-latency
-sample. Avoid third-party scripts and preserve a restrictive Content Security
-Policy without inline JavaScript.
+are restricted to 1h, 6h, 24h, and 30d. Do not restore 7d or All without also
+changing the fixed retention contract. Render ping loss and DNS failures in the
+approved failure red, and do not turn a total failure into a zero-latency sample.
+Avoid third-party scripts and preserve a restrictive Content Security Policy
+without inline JavaScript.
 
 Treat dashboard data as sensitive operational information. The direct-address
 allow-list intentionally ignores `X-Forwarded-For`. If nginx or another reverse
