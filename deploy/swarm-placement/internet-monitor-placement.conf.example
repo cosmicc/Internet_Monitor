@@ -1,0 +1,6 @@
+# Swarm service controlled by the placement reconciler.
+SERVICE_NAME=internet-monitor_internet-monitor
+
+# A ready, active node with this exact label receives the monitor task.
+PREFERRED_NODE_LABEL=internet-monitor
+PREFERRED_NODE_LABEL_VALUE=true

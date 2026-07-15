@@ -130,27 +130,38 @@ def test_runtime_contract_contains_no_legacy_prefixes():
 
 
 def test_version_surfaces_match_release_version():
-    """Package, image defaults, metadata, and released changelog should align."""
+    """Package, image defaults, metadata, and changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.2.1"
+    assert __version__ == "0.2.2"
     assert _text("VERSION").strip() == __version__
     assert pyproject["project"]["version"] == __version__
     assert pyproject["project"]["readme"] == "README.md"
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "internet_monitor*"
+    ]
     assert f"ARG APP_VERSION={__version__}" in _text("Dockerfile")
     assert f"internet-monitor:{__version__}" in _text("docker-compose.yml")
     assert f"internet-monitor:{__version__}" in _text("docker-stack.yml")
     assert f"## {__version__} - 07.15.2026" in _text("CHANGELOG.md")
 
 
-def test_swarm_prefers_labeled_node_without_preventing_failover():
-    """Swarm should prefer the monitor node but retain unlabeled fallbacks."""
+def test_stack_leaves_dynamic_placement_to_the_manager_reconciler():
+    """The static stack must remain schedulable before the reconciler runs."""
     stack = _text("docker-stack.yml")
 
-    assert "preferences:" in stack
-    assert "spread: node.labels.internet-monitor" in stack
+    assert "preferences:" not in stack
+    assert "spread: node.labels.internet-monitor" not in stack
     assert "node.labels.internet-monitor ==" not in stack
     assert "node.labels.internet-monitor==" not in stack
+
+
+def test_source_package_includes_manager_placement_assets():
+    """The source distribution should remain sufficient for host installation."""
+    manifest = _text("MANIFEST.in")
+
+    assert "recursive-include deploy/swarm-placement *" in manifest
+    assert "include scripts/*.sh" in manifest
 
 
 def test_release_workflow_is_release_only_and_publishes_ghcr_image():

@@ -1,6 +1,6 @@
 # Internet Monitor
 
-Internet Monitor 0.2.1 is a Docker-first Python service for Internet and gateway
+Internet Monitor 0.2.2 is a Docker-first Python service for Internet and gateway
 reachability, packet loss, latency, system DNS resolution, and direct DNS-server
 health checks.
 
@@ -23,8 +23,9 @@ health checks.
 - Shows web and Pushover warnings when ephemeral `/tmp` usage reaches 80%, and
   a critical alert at 95%.
 - Writes human-readable application logs only to the Docker console.
-- Supports Docker Compose, Portainer, and a dedicated single-replica Swarm stack
-  that prefers an operator-labeled node while retaining automatic failover.
+- Supports Docker Compose, Portainer, and a dedicated single-replica Swarm stack.
+- Includes an optional manager-side placement reconciler that selects a healthy
+  `internet-monitor=true` node, permits fallback, and automatically fails back.
 
 ## Configuration
 
@@ -57,7 +58,9 @@ per-cycle diagnostics are needed.
 Pushover credentials can be supplied through environment variables or Docker
 secrets.
 
-For deployment and secret setup, see [INSTALL.md](INSTALL.md).
+For deployment, Swarm preferred-node setup, and secrets, see
+[INSTALL.md](INSTALL.md). The placement utility runs on one stable, nonpreferred
+Swarm manager; the application container never receives the Docker API socket.
 
 ## Web Interface
 

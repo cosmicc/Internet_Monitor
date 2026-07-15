@@ -1,0 +1,41 @@
+[Unit]
+Description=Internet Monitor preferred-node placement reconciler
+Documentation=https://github.com/cosmicc/Internet_Monitor/blob/main/INSTALL.md
+Requires=docker.service
+After=docker.service network-online.target
+ConditionPathIsSocket=/var/run/docker.sock
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/etc/default/internet-monitor-placement
+ExecStart=/usr/bin/flock --nonblock /run/internet-monitor-placement-reconciler.lock /usr/local/sbin/internet-monitor-placement-reconciler
+TimeoutStartSec=25s
+UMask=0077
+
+# The Docker API socket is the only privileged interface this host utility needs.
+CapabilityBoundingSet=
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically check Internet Monitor preferred-node placement
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=2s
+RandomizedDelaySec=2s
+Unit=internet-monitor-placement.service
+
+[Install]
+WantedBy=timers.target

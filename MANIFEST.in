@@ -1,0 +1,2 @@
+recursive-include deploy/swarm-placement *
+include scripts/*.sh

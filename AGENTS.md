@@ -141,11 +141,26 @@ operators. Gunicorn, the Docker target port, the Flask development entry point,
 and the container health check must remain fixed on internal TCP port 5005. Do
 not reintroduce `WEB_HOST_PORT` or pass the published port into the container.
 
-The Swarm service uses a soft `node.labels.internet-monitor` placement
-preference. Keep this as a preference rather than a constraint so Swarm can
-reschedule the single task onto an eligible unlabeled node when no labeled node
-is available. Do not make the label mandatory unless the loss of automatic
-fallback is explicitly requested.
+The static Swarm stack intentionally has no placement preference or constraint.
+Docker's only native preference strategy is `spread`, which treats labeled and
+unlabeled nodes as separate groups instead of prioritizing the labeled group.
+Do not restore that ineffective preference or add a permanent label constraint.
+
+Preferred placement is an opt-in manager responsibility implemented by
+`deploy/swarm-placement/internet-monitor-placement-reconciler` and its systemd
+timer. When at least one node with the configured label is `ready` and `active`,
+the utility adds its exact hard constraint. When none is healthy, it removes
+only that constraint so Swarm can use another eligible node. When a preferred
+node returns, it restores the constraint and Swarm moves the task back. The
+utility must remain idempotent, must preserve unrelated constraints, and must
+fail without changing placement when node state cannot be read reliably.
+
+Install the utility on exactly one stable Swarm manager that does not carry the
+preferred label; it must remain available when the preferred node fails. Keep
+Docker socket access out of the application container; only the hardened
+manager-side oneshot may access the local Docker socket. Preserve transition-only
+journal logging, the 30-second default timer, the 10-to-3600-second installer
+range, and both manager-role and local-label safety checks.
 
 The container runs as UID/GID 10001, has a read-only root filesystem, drops all
 default capabilities, and adds back only `NET_RAW` for fping. Do not add broader

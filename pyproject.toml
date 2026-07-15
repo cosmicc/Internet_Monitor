@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "internet-monitor"
-version = "0.2.1"
+version = "0.2.2"
 description = "Docker-first Internet, latency, and DNS health monitor"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -17,6 +17,9 @@ dependencies = [
 
 [tool.setuptools.package-data]
 internet_monitor = ["templates/*.html", "static/*.css", "static/*.js"]
+
+[tool.setuptools.packages.find]
+include = ["internet_monitor*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,7 +4,7 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.2.1 image from GHCR. For
+The default Swarm deployment pulls the versioned 0.2.2 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
 override `IMAGE` with an image published under a test tag.
 
@@ -101,27 +101,13 @@ in a 16 MiB tmpfs.
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.1`. Override
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.2`. Override
 `IMAGE` when testing another registry tag.
 
 From a Swarm manager, label the node that should normally run Internet Monitor:
 
 ```bash
 docker node update --label-add internet-monitor=true <preferred-node>
-```
-
-The stack treats `internet-monitor` as a soft placement preference, not a hard
-constraint. Swarm therefore prefers an available node carrying the label but
-can reschedule the task onto another eligible node if the preferred node becomes
-unavailable. The ingress routing mesh keeps the published dashboard port
-reachable through any active Swarm node during that failover.
-
-Swarm does not automatically rebalance a healthy task merely because the
-preferred node later returns. After the preferred node is ready, explicitly
-reconcile the service if moving the monitor back is important:
-
-```bash
-docker service update --force internet-monitor_internet-monitor
 ```
 
 Deploy without Pushover secrets:
@@ -131,6 +117,73 @@ docker stack config --compose-file docker-stack.yml
 docker stack deploy --with-registry-auth --compose-file docker-stack.yml internet-monitor
 docker service logs -f internet-monitor_internet-monitor
 ```
+
+Docker Swarm does not provide a native “prefer this label, but fall back” rule.
+Its `spread` preference distributes tasks across label-value groups, so one
+labeled node is not prioritized over unlabeled nodes. The 0.2.2 stack therefore
+has no static placement rule and remains schedulable on any eligible node.
+
+To enable deterministic preference with fallback, install the included
+reconciler on exactly one stable Swarm manager after deploying the stack. That
+manager must not carry the preferred label, because the utility has to remain
+online when the preferred node fails:
+
+```bash
+sudo scripts/install-swarm-placement-reconciler.sh
+systemctl status internet-monitor-placement.timer
+```
+
+Every 30 seconds, the utility applies this behavior:
+
+- If a node labeled `internet-monitor=true` is ready and active, add the exact
+  placement constraint and let Swarm move the monitor there.
+- If no matching node is ready and active, remove only that constraint so Swarm
+  can place the task on another eligible node.
+- When the preferred node returns, restore the constraint so the task moves
+  back without a manual service update.
+
+The expected failover delay is up to one reconciliation interval plus Swarm's
+normal scheduling and task startup time. Label exactly one node when one
+specific host should be preferred; if several healthy nodes have the label,
+Swarm may select any of them.
+
+The default service name, label, and interval can be changed during installation:
+
+```bash
+sudo scripts/install-swarm-placement-reconciler.sh \
+  --service internet-monitor_internet-monitor \
+  --label internet-monitor=true \
+  --interval-seconds 30
+```
+
+The installer writes non-secret settings to
+`/etc/default/internet-monitor-placement` and a timer override under
+`/etc/systemd/system`. Rerun the installer with new options to change them. The
+utility logs only placement changes and errors to the system journal:
+
+```bash
+journalctl -u internet-monitor-placement.service
+docker service ps internet-monitor_internet-monitor
+docker service inspect internet-monitor_internet-monitor \
+  --format '{{json .Spec.TaskTemplate.Placement.Constraints}}'
+```
+
+The installer rejects a manager that has the preferred label. The application
+container remains unprivileged and never mounts the Docker socket. The host
+utility is a root-owned, locked-down oneshot because changing a Swarm service
+requires manager access to `/var/run/docker.sock`.
+
+To remove the utility, run the uninstaller on the same active manager. It stops
+the timer and removes the constraint it owns before deleting its files:
+
+```bash
+sudo scripts/uninstall-swarm-placement-reconciler.sh
+```
+
+Use `--keep-constraint` only when the current hard placement should remain after
+the timer is removed. If the selected manager is unavailable, the current
+constraint remains unchanged until the utility runs on an active manager; the
+application container cannot alter cluster placement itself.
 
 The service is intentionally fixed at one replica. Its published port uses the
 Swarm ingress routing mesh, while its target port remains fixed at `5005`. Do
@@ -181,7 +234,7 @@ survive a restart.
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.2.1`, to match the package
+The workflow requires the release tag, such as `v0.2.2`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.
@@ -193,6 +246,14 @@ Application events are available only through Docker console logging:
 ```bash
 docker compose logs -f
 docker service logs -f internet-monitor_internet-monitor
+```
+
+Manager-side placement changes and reconciliation errors are separate from
+application logs and are available through systemd:
+
+```bash
+journalctl -u internet-monitor-placement.service
+systemctl list-timers internet-monitor-placement.timer
 ```
 
 Routine dashboard polling is intentionally excluded from the Gunicorn access
@@ -227,6 +288,23 @@ or DNS failure, weighted average latency, and minimum/maximum latency in each
 displayed interval. `HISTORY_MAX_POINTS` limits response and
 browser chart size. Keep `HISTORY_PATH` on the container tmpfs;
 pointing it at persistent storage changes the approved storage model.
+
+### Upgrading From 0.2.1 To 0.2.2
+
+Redeploy `docker-stack.yml` first. This removes the old `spread` preference,
+which did not actually prioritize the labeled node. The service remains free to
+run anywhere until the optional manager utility is installed.
+
+Keep the existing node label, then install the reconciler on one manager:
+
+```bash
+docker node update --label-add internet-monitor=true <preferred-node>
+sudo scripts/install-swarm-placement-reconciler.sh
+```
+
+No application environment variables or monitoring data need migration. The
+reconciler is host-level deployment automation and does not change the
+application container's privileges or mounts.
 
 ### Upgrading From 0.1.x To 0.2.0
 

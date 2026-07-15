@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.2 - 07.15.2026
+
+### Added
+
+- Added an opt-in, manager-side systemd placement reconciler that checks Swarm
+  node health every 30 seconds by default.
+- Added install and uninstall scripts with configurable service name, preferred
+  node label, and reconciliation interval.
+- Added transition-only journal logging and simulated Swarm tests for preferred
+  placement, fallback, recovery, idempotency, and manager validation.
+
+### Changed
+
+- Changed preferred Swarm placement from the ineffective native `spread`
+  preference to a dynamically managed `internet-monitor=true` constraint.
+- Kept the Docker API socket out of the Internet Monitor container; only the
+  hardened host-side utility on one manager can update service placement.
+- Changed all active package and container version surfaces to 0.2.2.
+
+### Fixed
+
+- Fixed labeled and unlabeled nodes being treated as equal spread groups, which
+  allowed the monitor task to remain on an unlabeled node.
+- Fixed failback after node recovery: the reconciler restores the preferred-node
+  constraint and Swarm moves the single task back automatically.
+- Fixed failover under a hard preference by removing only the reconciler-owned
+  constraint when no ready, active preferred node remains.
+- Fixed Python package discovery so top-level deployment assets cannot be
+  mistaken for an importable application package.
+
 ## 0.2.1 - 07.15.2026
 
 ### Added

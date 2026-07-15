@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Reconcile Internet Monitor's preferred-node Swarm placement constraint.
+
+set -euo pipefail
+IFS=$'\n\t'
+
+readonly DEFAULT_SERVICE_NAME="internet-monitor_internet-monitor"
+readonly DEFAULT_LABEL_KEY="internet-monitor"
+readonly DEFAULT_LABEL_VALUE="true"
+
+service_name="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
+label_key="${PREFERRED_NODE_LABEL:-$DEFAULT_LABEL_KEY}"
+label_value="${PREFERRED_NODE_LABEL_VALUE:-$DEFAULT_LABEL_VALUE}"
+release_constraint=false
+
+usage() {
+    cat <<'EOF'
+Usage: internet-monitor-placement-reconciler [OPTIONS]
+
+Reconcile one Docker Swarm placement constraint owned by Internet Monitor.
+
+Options:
+  --service NAME             Swarm service name.
+  --label KEY=VALUE          Preferred node label and value.
+  --release-constraint       Remove the owned constraint and exit.
+  -h, --help                 Show this help.
+EOF
+}
+
+fail() {
+    printf 'internet-monitor-placement: %s\n' "$*" >&2
+    exit 1
+}
+
+log_transition() {
+    printf 'internet-monitor-placement: %s\n' "$*"
+}
+
+validate_identifier() {
+    local name="$1"
+    local value="$2"
+
+    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] ||
+        fail "$name contains unsupported characters or exceeds 128 characters."
+}
+
+while (($# > 0)); do
+    case "$1" in
+        --service)
+            (($# >= 2)) || fail "--service requires a value."
+            service_name="$2"
+            shift 2
+            ;;
+        --label)
+            (($# >= 2)) || fail "--label requires KEY=VALUE."
+            [[ "$2" == *=* ]] || fail "--label requires KEY=VALUE."
+            label_key="${2%%=*}"
+            label_value="${2#*=}"
+            shift 2
+            ;;
+        --release-constraint)
+            release_constraint=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "unknown option: $1"
+            ;;
+    esac
+done
+
+validate_identifier "service name" "$service_name"
+validate_identifier "label key" "$label_key"
+validate_identifier "label value" "$label_value"
+
+command -v docker >/dev/null 2>&1 || fail "docker was not found in PATH."
+
+if ! swarm_details="$(
+    docker info --format \
+        '{{.Swarm.LocalNodeState}}|{{.Swarm.ControlAvailable}}|{{.Swarm.NodeID}}' \
+        2>/dev/null
+)"; then
+    fail "cannot query Docker; run this utility on a Swarm manager."
+fi
+
+IFS='|' read -r swarm_state control_available local_node_id <<<"$swarm_details"
+[[ "$swarm_state" == "active" && "$control_available" == "true" &&
+    -n "$local_node_id" ]] ||
+    fail "this host is not an active Swarm manager."
+
+if ! constraints="$(
+    docker service inspect "$service_name" \
+        --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}' \
+        2>/dev/null
+)"; then
+    if [[ "$release_constraint" == true ]]; then
+        log_transition "service $service_name does not exist; no constraint needs removal."
+        exit 0
+    fi
+    fail "Swarm service $service_name does not exist or cannot be inspected."
+fi
+
+owned_constraint="node.labels.${label_key}==${label_value}"
+constraint_present=false
+owned_constraint_actual="$owned_constraint"
+conflicting_constraint=""
+
+while IFS= read -r existing_constraint; do
+    [[ -n "$existing_constraint" ]] || continue
+    normalized_constraint="${existing_constraint//[[:space:]]/}"
+
+    if [[ "$normalized_constraint" == "$owned_constraint" ]]; then
+        constraint_present=true
+        owned_constraint_actual="$existing_constraint"
+    elif [[ "$normalized_constraint" == "node.labels.${label_key}=="* ||
+        "$normalized_constraint" == "node.labels.${label_key}!="* ]]; then
+        conflicting_constraint="$existing_constraint"
+    fi
+done <<<"$constraints"
+
+if [[ "$release_constraint" == true ]]; then
+    if [[ "$constraint_present" == true ]]; then
+        docker service update --detach=true \
+            --constraint-rm "$owned_constraint_actual" "$service_name" >/dev/null
+        log_transition \
+            "removed $owned_constraint from $service_name; Swarm fallback is enabled."
+    fi
+    exit 0
+fi
+
+[[ -z "$conflicting_constraint" ]] || fail \
+    "service already has a different constraint for node.labels.${label_key}: ${conflicting_constraint}"
+
+if ! node_ids="$(docker node ls --quiet 2>/dev/null)"; then
+    fail "cannot list Swarm nodes; placement was not changed."
+fi
+
+preferred_node_count=0
+local_manager_is_preferred=false
+node_template="{{.Status.State}}|{{.Spec.Availability}}|{{index .Spec.Labels \"${label_key}\"}}"
+
+while IFS= read -r node_id; do
+    [[ -n "$node_id" ]] || continue
+
+    if ! node_state="$(
+        docker node inspect "$node_id" --format "$node_template" 2>/dev/null
+    )"; then
+        fail "cannot inspect Swarm node $node_id; placement was not changed."
+    fi
+
+    if [[ "$node_state" == "ready|active|${label_value}" ]]; then
+        ((preferred_node_count += 1))
+        if [[ "$node_id" == "$local_node_id" ]]; then
+            local_manager_is_preferred=true
+        fi
+    fi
+done <<<"$node_ids"
+
+if [[ "$local_manager_is_preferred" == true ]]; then
+    if [[ "$constraint_present" == true ]]; then
+        docker service update --detach=true \
+            --constraint-rm "$owned_constraint_actual" "$service_name" >/dev/null
+        log_transition \
+            "removed $owned_constraint from $service_name because the reconciler manager is also preferred."
+    fi
+    fail "install this utility on a stable manager that does not carry ${label_key}=${label_value}."
+fi
+
+if ((preferred_node_count > 0)); then
+    if [[ "$constraint_present" == false ]]; then
+        docker service update --detach=true \
+            --constraint-add "$owned_constraint" "$service_name" >/dev/null
+        log_transition \
+            "added $owned_constraint to $service_name; ready preferred nodes: $preferred_node_count."
+    fi
+elif [[ "$constraint_present" == true ]]; then
+    docker service update --detach=true \
+        --constraint-rm "$owned_constraint_actual" "$service_name" >/dev/null
+    log_transition \
+        "removed $owned_constraint from $service_name; no ready preferred node is available."
+fi
