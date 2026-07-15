@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added a documented single-variable dashboard port contract for Compose,
+  Portainer, and Swarm deployments.
 - Added a soft Swarm placement preference for nodes carrying the
   `internet-monitor` label.
 - Added operator instructions for labeling the preferred node and reconciling
@@ -20,6 +22,11 @@
 
 ### Changed
 
+- Changed `WEB_PORT` to control only the Docker host or Swarm ingress port while
+  fixing the container's Gunicorn, Docker target, and health-check port at
+  `5005`.
+- Removed the redundant `WEB_HOST_PORT` variable. Existing custom deployments
+  should move its value to `WEB_PORT`.
 - Changed all package, container, deployment, and documentation version surfaces
   to 0.2.0.
 - Changed every active environment variable to its shorter unprefixed name. The
@@ -57,6 +64,8 @@
 
 ### Fixed
 
+- Fixed the possibility of a published-port change desynchronizing Gunicorn,
+  Docker's target port, or the container health check.
 - Fixed Swarm placement so the single monitor task considers the
   operator-designated node before other eligible nodes without sacrificing
   automatic failover.

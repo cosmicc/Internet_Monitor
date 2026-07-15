@@ -2,48 +2,59 @@
 
 from __future__ import annotations
 
-import http.server
-import threading
-
 import pytest
 
 from internet_monitor import healthcheck
 
 
-class _HealthHandler(http.server.BaseHTTPRequestHandler):
-    """Return a successful response only for the health endpoint."""
+class _HealthResponse:
+    """Represent the successful response returned by the fake connection."""
 
-    def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        self.send_response(200 if self.path == "/health" else 404)
-        self.end_headers()
+    status = 200
 
-    def log_message(self, format: str, *args: object) -> None:
-        """Keep the test server quiet."""
+    def close(self) -> None:
+        """Match the standard-library HTTP response interface."""
 
 
-def test_web_port_uses_default_and_validates_environment(monkeypatch: pytest.MonkeyPatch):
-    """The health check accepts only a valid TCP port."""
-    monkeypatch.delenv("WEB_PORT", raising=False)
-    assert healthcheck._web_port() == 5005
+class _HealthConnection:
+    """Capture the fixed internal address used by the health check."""
 
-    monkeypatch.setenv("WEB_PORT", "65536")
-    with pytest.raises(ValueError, match="between 1 and 65535"):
-        healthcheck._web_port()
+    calls: list[tuple[object, ...]] = []
+
+    def __init__(self, host: str, port: int, *, timeout: int) -> None:
+        self.calls.append(("connect", host, port, timeout))
+
+    def request(self, method: str, path: str) -> None:
+        """Record the requested method and path."""
+        self.calls.append(("request", method, path))
+
+    def getresponse(self) -> _HealthResponse:
+        """Return a successful health response."""
+        return _HealthResponse()
+
+    def close(self) -> None:
+        """Record connection cleanup."""
+        self.calls.append(("close",))
 
 
-def test_main_checks_the_local_health_endpoint(monkeypatch: pytest.MonkeyPatch):
-    """A local HTTP 200 makes the command exit successfully."""
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    monkeypatch.setenv("WEB_PORT", str(server.server_port))
+def test_main_checks_the_fixed_internal_health_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Published WEB_PORT values must not change the container health target."""
+    _HealthConnection.calls.clear()
+    monkeypatch.setenv("WEB_PORT", "65000")
+    monkeypatch.setattr(
+        healthcheck.http.client,
+        "HTTPConnection",
+        _HealthConnection,
+    )
 
-    try:
-        with pytest.raises(SystemExit) as exit_info:
-            healthcheck.main()
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1)
+    with pytest.raises(SystemExit) as exit_info:
+        healthcheck.main()
 
     assert exit_info.value.code == 0
+    assert _HealthConnection.calls == [
+        ("connect", "127.0.0.1", 5005, 3),
+        ("request", "GET", "/health"),
+        ("close",),
+    ]

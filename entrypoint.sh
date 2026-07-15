@@ -8,7 +8,7 @@ python -u -m internet_monitor.monitor &
 monitor_pid="$!"
 
 gunicorn \
-  --bind "0.0.0.0:${WEB_PORT:-5005}" \
+  --bind "0.0.0.0:5005" \
   --workers "${WEB_WORKERS:-1}" \
   --threads "${WEB_THREADS:-2}" \
   --worker-tmp-dir /tmp \
