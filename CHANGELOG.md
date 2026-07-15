@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.1 - 07.15.2026
+
+### Added
+
+- Added a full-width Important Hosts row that presents up to three configured
+  hosts side by side on desktop.
+
+### Changed
+
+- Placed Internet Performance in the left desktop column and Gateway Details
+  above DNS Health in the right column.
+- Condensed each gateway into a compact horizontal metric row on wide screens.
+- Kept the responsive dashboard as a single-column stack on mobile screens.
+- Updated the README screenshot with complete 24-hour demo graphs, two DNS
+  servers, two gateways, and three important hosts.
+
+### Fixed
+
+- Fixed uneven detail-card heights and unused desktop space by moving Important
+  Hosts below the balanced two-column monitoring region.
+
 ## 0.2.0 - 07.14.2026
 
 ### Added

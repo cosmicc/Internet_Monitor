@@ -175,6 +175,12 @@ setting without an incorrect first paint. A manual Light or Dark choice may be
 stored only in same-origin browser storage and must remain usable when storage
 is disabled.
 
+The desktop detail region uses a balanced two-column upper grid. Keep Internet
+Performance on the left, keep compact Gateway Details above DNS Health on the
+right, and place Important Hosts in one full-width row below with up to three
+equal host cards. At 760 px and below, the cards must collapse into the
+overflow-free order Internet, Gateway Details, DNS Health, then Important Hosts.
+
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` and `/api/history` endpoints. History ranges
 are restricted to 1h, 6h, 24h, and 30d. Do not restore 7d or All without also

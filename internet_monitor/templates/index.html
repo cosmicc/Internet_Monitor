@@ -171,7 +171,7 @@
     </section>
 
     <section class="details-grid" aria-label="Detailed monitoring statistics">
-        <article class="panel internet-panel">
+        <article class="panel internet-panel" data-details-card="internet">
             <div class="section-heading">
                 <div>
                     <p class="eyebrow">Public targets</p>
@@ -254,7 +254,8 @@
             <div class="chart-axis"><span data-history-axis-start>24 hours ago</span><span>Now</span></div>
         </article>
 
-        <article class="panel gateway-panel">
+        <div class="details-column" data-details-column="secondary">
+        <article class="panel gateway-panel" data-details-card="gateways">
             <div class="section-heading">
                 <div>
                     <p class="eyebrow">Local route</p>
@@ -283,8 +284,7 @@
             </div>
         </article>
 
-        <div class="diagnostics-column">
-        <article class="panel dns-panel">
+        <article class="panel dns-panel" data-details-card="dns">
             <div class="section-heading">
                 <div>
                     <p class="eyebrow">Resolver checks</p>
@@ -336,8 +336,9 @@
                 <div><dt>Slow threshold</dt><dd class="tabular" data-bind="dns-threshold">{{ "%.2f"|format(dashboard.dns.slow_threshold_ms) }} ms</dd></div>
             </dl>
         </article>
+        </div>
 
-        <article class="panel important-panel">
+        <article class="panel important-panel" data-details-card="important-hosts">
             <div class="section-heading">
                 <div>
                     <p class="eyebrow">Priority checks</p>
@@ -364,7 +365,7 @@
                         <div><dt>Average</dt><dd class="tabular" data-important-average>{{ ping_value(host.average_latency_ms) }}</dd></div>
                         <div><dt>Packet loss</dt><dd class="tabular" data-important-loss>{% if host.loss_percent is not none %}{{ host.loss_percent }}%{% else %}Unavailable{% endif %}</dd></div>
                     </dl>
-                    {{ history_sparkline("important-host-" ~ loop.index0, host.host ~ " latency") }}
+                    {{ history_sparkline("important-host-" ~ loop.index0, host.host ~ " latency", "ping", "important-sparkline") }}
                 </section>
                 {% endfor %}
             </div>
@@ -372,7 +373,6 @@
             <p class="important-empty">Set <code>IMPORTANT_HOST_1</code> through <code>IMPORTANT_HOST_3</code> to enable these checks.</p>
             {% endif %}
         </article>
-        </div>
     </section>
 
     <footer class="monitor-footer">
