@@ -434,9 +434,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         title=_env_required_str(
             source, "WEB_TITLE", "Internet Monitor"
         ),
-        port=_env_int(
-            source, "WEB_PORT", 5005, minimum=1, maximum=65535
-        ),
         workers=_env_int(
             source,
             "WEB_WORKERS",

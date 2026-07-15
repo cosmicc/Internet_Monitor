@@ -33,6 +33,9 @@ All operator settings are Docker environment variables. Start with
 query `DNS_HOST`. Version 0.2.0 removes the old `INTERNET_MONITOR_` prefix from
 every variable; old prefixed names are intentionally ignored.
 
+`WEB_PORT` selects the Docker host or Swarm ingress port used to reach the
+dashboard. The container's internal web port is fixed at `5005`.
+
 `GATEWAY_1_IP` and `GATEWAY_2_IP` are optional.
 When configured, each value must be a pingable IPv4 or IPv6 address representing
 the next device in order toward the Internet.

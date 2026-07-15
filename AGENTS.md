@@ -136,6 +136,11 @@ docker stack config --compose-file docker-stack.yml --compose-file docker-stack.
 single-replica, ingress-published, and registry-image based. Stop-first updates
 prevent duplicate monitoring and notifications.
 
+`WEB_PORT` controls only the Docker host or Swarm ingress port published to
+operators. Gunicorn, the Docker target port, the Flask development entry point,
+and the container health check must remain fixed on internal TCP port 5005. Do
+not reintroduce `WEB_HOST_PORT` or pass the published port into the container.
+
 The Swarm service uses a soft `node.labels.internet-monitor` placement
 preference. Keep this as a preference rather than a constraint so Swarm can
 reschedule the single task onto an eligible unlabeled node when no labeled node

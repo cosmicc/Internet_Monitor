@@ -38,7 +38,6 @@ RUNTIME_ENVIRONMENT_VARIABLES = {
     "HISTORY_MAX_POINTS",
     "TIMEZONE",
     "WEB_TITLE",
-    "WEB_PORT",
     "WEB_WORKERS",
     "WEB_THREADS",
     "WEB_ALLOWED_HOSTS",
@@ -86,6 +85,30 @@ def test_deployments_do_not_persist_application_state_or_logs():
     assert "--access-logfile" not in entrypoint
     assert "HISTORY_DETAILED_HOURS" not in deployment_text
     assert "HISTORY_MINUTE_DAYS" not in deployment_text
+
+
+def test_one_variable_publishes_the_fixed_internal_web_port():
+    """WEB_PORT should affect ingress only while container services use 5005."""
+    environment_example = _text(".env.example")
+    compose = _text("docker-compose.yml")
+    stack = _text("docker-stack.yml")
+    internal_contract = "".join(
+        (
+            _text("entrypoint.sh"),
+            _text("internet_monitor/settings.py"),
+            _text("internet_monitor/healthcheck.py"),
+        )
+    )
+
+    assert environment_example.count("WEB_PORT=") == 1
+    assert '"${WEB_PORT:-5005}:5005"' in compose
+    assert "target: 5005" in stack
+    assert "published: ${WEB_PORT:-5005}" in stack
+    assert "WEB_HOST_PORT" not in environment_example + compose + stack
+    assert not re.search(r"^\s+WEB_PORT:", compose, re.MULTILINE)
+    assert not re.search(r"^\s+WEB_PORT:", stack, re.MULTILINE)
+    assert '"WEB_PORT"' not in internal_contract
+    assert '--bind "0.0.0.0:5005"' in _text("entrypoint.sh")
 
 
 def test_runtime_contract_contains_no_legacy_prefixes():

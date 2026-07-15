@@ -48,6 +48,7 @@ def test_environment_overrides_are_parsed_and_dns_servers_are_deduplicated():
             "INTERVAL": "30",
             "HISTORY_PATH": "/tmp/custom-history.json",
             "HISTORY_MAX_POINTS": "600",
+            "WEB_PORT": "6000",
             "WEB_ALLOWED_HOSTS": "127.0.0.1, 10.0.0.5",
             "PUSHOVER_TOKEN": "token-from-alias",
             "PUSHOVER_USER": "user-from-alias",
@@ -72,6 +73,7 @@ def test_environment_overrides_are_parsed_and_dns_servers_are_deduplicated():
     assert settings.web.refresh_interval == 30
     assert settings.web.history_path == "/tmp/custom-history.json"
     assert settings.web.history_max_points == 600
+    assert settings.web.port == 5005
     assert settings.web.allowed_hosts == ("127.0.0.1", "10.0.0.5")
     assert settings.pushover.token == "token-from-alias"
     assert settings.pushover.user == "user-from-alias"
@@ -102,7 +104,6 @@ def test_docker_secret_files_take_precedence(tmp_path: Path):
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("WEB_PORT", "70000"),
         ("INTERVAL", "0"),
         ("INTERVAL", "4"),
         ("PING_HOST", ""),

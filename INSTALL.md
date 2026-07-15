@@ -28,6 +28,32 @@ docker compose logs -f
 
 Open `http://<docker-host>:5005`, or the configured host port.
 
+## Dashboard Port Configuration
+
+`WEB_PORT` is the only dashboard port setting. It controls the port published
+on the Docker host or through the Swarm ingress routing mesh. The application,
+Docker target, and health check always use port `5005` inside the container.
+
+For example, publish the dashboard on port `8080` without changing its internal
+services:
+
+```dotenv
+WEB_PORT=8080
+```
+
+Deployments created from an earlier 0.2.0 configuration may contain both
+`WEB_HOST_PORT` and `WEB_PORT`. Keep the former `WEB_HOST_PORT` value as the new
+`WEB_PORT` value and remove `WEB_HOST_PORT`:
+
+```dotenv
+# Earlier configuration
+WEB_HOST_PORT=8080
+WEB_PORT=5005
+
+# Current configuration
+WEB_PORT=8080
+```
+
 ## Gateway Path Configuration
 
 Set either or both optional gateway variables in `.env` or the stack environment:
@@ -107,8 +133,9 @@ docker service logs -f internet-monitor_internet-monitor
 ```
 
 The service is intentionally fixed at one replica. Its published port uses the
-Swarm ingress routing mesh. Do not scale it, because each replica would run the
-same checks and send duplicate alerts.
+Swarm ingress routing mesh, while its target port remains fixed at `5005`. Do
+not scale it, because each replica would run the same checks and send duplicate
+alerts.
 
 ## Pushover Docker Secrets For Swarm
 
