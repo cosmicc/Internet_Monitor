@@ -14,6 +14,9 @@
   fping targets, DNS-aware skipping, retained history, and independent alerts.
 - Added live tmpfs capacity reporting with web and Pushover warning, critical,
   measurement-failure, and recovery transitions.
+- Added an accessible Light/Dark dashboard control with labeled desktop choices
+  and compact sun/moon icons on mobile.
+- Added a dashboard screenshot to the README.
 
 ### Changed
 
@@ -49,6 +52,8 @@
 - Bounded probe counts, timing, DNS-server count, web concurrency, and chart
   points, and reject configurations whose probe window cannot fit the monitor
   interval.
+- Changed the dashboard's initial theme to follow the device color-scheme
+  setting and remember a manual browser choice across reloads.
 
 ### Fixed
 

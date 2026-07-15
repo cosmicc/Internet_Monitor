@@ -160,9 +160,15 @@ requested.
 
 ## Web And Security
 
-The approved visual contract is the Operational Dark palette in
-[`docs/color-palette.svg`](docs/color-palette.svg). Keep dashboard changes
-consistent with those colors and maintain uniform spacing.
+The approved visual contract uses the Operational Dark palette in
+[`docs/color-palette.svg`](docs/color-palette.svg) and the matching Operational
+Light palette in
+[`docs/color-palette-light.svg`](docs/color-palette-light.svg). Keep dashboard
+changes consistent with those colors and maintain uniform spacing. With no
+saved browser preference, the dashboard must follow the device color-scheme
+setting without an incorrect first paint. A manual Light or Dark choice may be
+stored only in same-origin browser storage and must remain usable when storage
+is disabled.
 
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` and `/api/history` endpoints. History ranges

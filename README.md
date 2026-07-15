@@ -4,6 +4,8 @@ Internet Monitor 0.2.0 is a Docker-first Python service for Internet and gateway
 reachability, packet loss, latency, system DNS resolution, and direct DNS-server
 health checks.
 
+[![Internet Monitor web interface showing healthy Internet, DNS, storage, and important-host checks](docs/web-interface.png)](docs/web-interface.png)
+
 ## Features
 
 - Concurrently checks primary, backup, and two optional gateway targets with
@@ -56,11 +58,12 @@ For deployment and secret setup, see [INSTALL.md](INSTALL.md).
 
 ## Web Interface
 
-The dark dashboard is published on port `5005` by default. It polls the sanitized
-same-origin status endpoint at the monitor interval without reloading the page.
-History controls provide 1 hour, 6 hour, 24 hour, and 30 day views for gateways,
-Internet targets, the system resolver, configured DNS servers, and important
-hosts. The page also reports the live capacity of the ephemeral tmpfs.
+The dashboard is published on port `5005` by default. Its light or dark theme
+follows the device setting until the browser saves a manual choice. It polls the
+sanitized same-origin status endpoint at the monitor interval without reloading
+the page. History controls provide 1 hour, 6 hour, 24 hour, and 30 day views for
+gateways, Internet targets, the system resolver, configured DNS servers, and
+important hosts. The page also reports the live capacity of the ephemeral tmpfs.
 `WEB_ALLOWED_HOSTS` can restrict direct client addresses;
 forwarded addresses are not trusted unless reverse-proxy support is added later.
 

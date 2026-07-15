@@ -6,6 +6,53 @@
         return;
     }
 
+    const themeStorageKey = "internet-monitor-theme";
+    const systemDarkTheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const themeOptions = dashboard.querySelectorAll("[data-theme-option]");
+    let selectedTheme = null;
+
+    try {
+        const savedTheme = window.localStorage.getItem(themeStorageKey);
+        if (savedTheme === "light" || savedTheme === "dark") {
+            selectedTheme = savedTheme;
+        }
+    } catch (_error) {
+        // A disabled storage API must not prevent monitoring or theme controls.
+    }
+
+    function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        themeOptions.forEach((button) => {
+            button.setAttribute(
+                "aria-pressed",
+                String(button.dataset.themeOption === theme),
+            );
+        });
+    }
+
+    function chooseTheme(theme) {
+        if (theme !== "light" && theme !== "dark") {
+            return;
+        }
+        selectedTheme = theme;
+        applyTheme(theme);
+        try {
+            window.localStorage.setItem(themeStorageKey, theme);
+        } catch (_error) {
+            // The selection still applies for this page when storage is unavailable.
+        }
+    }
+
+    themeOptions.forEach((button) => {
+        button.addEventListener("click", () => chooseTheme(button.dataset.themeOption));
+    });
+    systemDarkTheme.addEventListener("change", (event) => {
+        if (!selectedTheme) {
+            applyTheme(event.matches ? "dark" : "light");
+        }
+    });
+    applyTheme(selectedTheme || (systemDarkTheme.matches ? "dark" : "light"));
+
     const statusUrl = dashboard.dataset.statusUrl;
     const historyUrl = dashboard.dataset.historyUrl;
     const validHistoryRanges = new Set(["1h", "6h", "24h", "30d"]);

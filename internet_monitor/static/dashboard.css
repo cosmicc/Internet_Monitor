@@ -9,15 +9,70 @@
     --success: #1b5e20;
     --success-border: #2e7d32;
     --success-text: #e8f5e9;
+    --success-on-solid: #e8f5e9;
     --warning: #f57f17;
     --warning-border: #fbc02d;
     --warning-text: #121212;
     --failure: #b71c1c;
     --failure-border: #d32f2f;
     --failure-text: #ffebee;
+    --failure-on-solid: #ffebee;
     --unknown: #424242;
     --unknown-border: #616161;
+    --unknown-on-solid: #e0e0e0;
     --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --background: #f3f5f7;
+    --surface: #ffffff;
+    --surface-deep: #e9edf1;
+    --border: #c4ccd4;
+    --text: #20262d;
+    --muted: #5f6b76;
+    --success: #2e7d32;
+    --success-border: #2e7d32;
+    --success-text: #1b5e20;
+    --success-on-solid: #ffffff;
+    --warning: #f9a825;
+    --warning-border: #9a5b00;
+    --warning-text: #20262d;
+    --failure: #c62828;
+    --failure-border: #c62828;
+    --failure-text: #a31515;
+    --failure-on-solid: #ffffff;
+    --unknown: #6b7280;
+    --unknown-border: #6b7280;
+    --unknown-on-solid: #ffffff;
+    --shadow: 0 10px 28px rgba(31, 45, 61, 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+        color-scheme: light;
+        --background: #f3f5f7;
+        --surface: #ffffff;
+        --surface-deep: #e9edf1;
+        --border: #c4ccd4;
+        --text: #20262d;
+        --muted: #5f6b76;
+        --success: #2e7d32;
+        --success-border: #2e7d32;
+        --success-text: #1b5e20;
+        --success-on-solid: #ffffff;
+        --warning: #f9a825;
+        --warning-border: #9a5b00;
+        --warning-text: #20262d;
+        --failure: #c62828;
+        --failure-border: #c62828;
+        --failure-text: #a31515;
+        --failure-on-solid: #ffffff;
+        --unknown: #6b7280;
+        --unknown-border: #6b7280;
+        --unknown-on-solid: #ffffff;
+        --shadow: 0 10px 28px rgba(31, 45, 61, 0.1);
+    }
 }
 
 * {
@@ -85,6 +140,7 @@ h3 {
 }
 
 .title-group,
+.header-actions,
 .live-meta,
 .live-indicator,
 .path-node-title,
@@ -96,6 +152,62 @@ h3 {
 
 .title-group {
     gap: 12px;
+}
+
+.header-actions {
+    gap: 16px;
+}
+
+.theme-switcher {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-deep);
+}
+
+.theme-option {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 650;
+}
+
+.theme-option:hover {
+    color: var(--text);
+}
+
+.theme-option:focus-visible {
+    outline: 2px solid var(--warning-border);
+    outline-offset: 1px;
+}
+
+.theme-option[aria-pressed="true"] {
+    border-color: var(--border);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.theme-icon {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentcolor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
 }
 
 .version {
@@ -189,7 +301,7 @@ h3 {
 .storage-alert.status-down .storage-alert-icon,
 .storage-alert.status-unknown .storage-alert-icon {
     background: var(--failure);
-    color: var(--failure-text);
+    color: var(--failure-on-solid);
 }
 
 .storage-alert h2 {
@@ -235,14 +347,14 @@ h3 {
     place-items: center;
     border-radius: 50%;
     background: var(--unknown);
-    color: var(--text);
+    color: var(--unknown-on-solid);
     font-size: 1.55rem;
     font-weight: 750;
 }
 
 .diagnosis-banner.status-up .diagnosis-icon {
     background: var(--success);
-    color: var(--success-text);
+    color: var(--success-on-solid);
 }
 
 .diagnosis-banner.status-warning .diagnosis-icon {
@@ -252,7 +364,7 @@ h3 {
 
 .diagnosis-banner.status-down .diagnosis-icon {
     background: var(--failure);
-    color: var(--failure-text);
+    color: var(--failure-on-solid);
 }
 
 .diagnosis-banner h2 {
@@ -515,7 +627,7 @@ h3 {
 .chart-point-loss,
 .chart-loss-point {
     fill: var(--failure-border);
-    stroke: var(--failure-text);
+    stroke: var(--failure-on-solid);
     stroke-width: 0.6;
     vector-effect: non-scaling-stroke;
 }
@@ -941,6 +1053,28 @@ h3 {
         align-items: flex-start;
         gap: 10px;
         padding: 3px 2px;
+    }
+
+    .header-actions {
+        align-items: flex-end;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .theme-option {
+        width: 38px;
+        min-height: 38px;
+        padding: 5px;
+    }
+
+    .theme-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
     }
 
     .live-meta {

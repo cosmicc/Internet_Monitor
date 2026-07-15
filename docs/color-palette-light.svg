@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340" role="img" aria-labelledby="title description">
+  <title id="title">Internet Monitor operational light color palette</title>
+  <desc id="description">The approved light dashboard palette with background, surface, text, success, warning, failure, and unknown state colors.</desc>
+  <rect width="960" height="340" fill="#F3F5F7"/>
+  <text x="40" y="52" fill="#20262D" font-family="system-ui, sans-serif" font-size="28" font-weight="700">Internet Monitor — Operational Light</text>
+  <g font-family="system-ui, sans-serif" font-size="16" font-weight="600">
+    <g transform="translate(40 90)">
+      <rect width="200" height="90" rx="10" fill="#F3F5F7" stroke="#6B7280"/>
+      <text x="16" y="38" fill="#20262D">Background</text>
+      <text x="16" y="66" fill="#5F6B76">#F3F5F7</text>
+    </g>
+    <g transform="translate(260 90)">
+      <rect width="200" height="90" rx="10" fill="#FFFFFF" stroke="#C4CCD4"/>
+      <text x="16" y="38" fill="#20262D">Surface</text>
+      <text x="16" y="66" fill="#5F6B76">#FFFFFF</text>
+    </g>
+    <g transform="translate(480 90)">
+      <rect width="200" height="90" rx="10" fill="#20262D"/>
+      <text x="16" y="38" fill="#FFFFFF">Primary text</text>
+      <text x="16" y="66" fill="#E9EDF1">#20262D</text>
+    </g>
+    <g transform="translate(700 90)">
+      <rect width="200" height="90" rx="10" fill="#6B7280"/>
+      <text x="16" y="38" fill="#FFFFFF">Unknown</text>
+      <text x="16" y="66" fill="#FFFFFF">#6B7280</text>
+    </g>
+    <g transform="translate(150 205)">
+      <rect width="200" height="90" rx="10" fill="#2E7D32"/>
+      <text x="16" y="38" fill="#FFFFFF">Success</text>
+      <text x="16" y="66" fill="#FFFFFF">#2E7D32</text>
+    </g>
+    <g transform="translate(380 205)">
+      <rect width="200" height="90" rx="10" fill="#F9A825" stroke="#9A5B00"/>
+      <text x="16" y="38" fill="#20262D">Warning</text>
+      <text x="16" y="66" fill="#20262D">#F9A825</text>
+    </g>
+    <g transform="translate(610 205)">
+      <rect width="200" height="90" rx="10" fill="#C62828"/>
+      <text x="16" y="38" fill="#FFFFFF">Failure</text>
+      <text x="16" y="66" fill="#FFFFFF">#C62828</text>
+    </g>
+  </g>
+</svg>
