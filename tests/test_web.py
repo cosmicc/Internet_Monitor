@@ -165,6 +165,11 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b'data-history-range="7d"' not in response.data
     assert b'data-history-range="all"' not in response.data
     assert b">All</button>" not in response.data
+    assert b'aria-label="Color theme"' in response.data
+    assert b'data-theme-option="light"' in response.data
+    assert b'data-theme-option="dark"' in response.data
+    assert b">Light</span>" in response.data
+    assert b">Dark</span>" in response.data
     assert b'data-sparkline="internet-target-0"' in response.data
     assert b'data-sparkline="dns-server-0"' in response.data
     assert b"Packet loss" in response.data
@@ -184,6 +189,9 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"no latency response" in script_response.data
     assert b"loadHistory" in script_response.data
     assert b"failed DNS check" in script_response.data
+    assert b"prefers-color-scheme: dark" in script_response.data
+    assert b"internet-monitor-theme" in script_response.data
+    assert b"localStorage.setItem" in script_response.data
 
     api_response = create_app(settings).test_client().get("/api/status")
     assert api_response.status_code == 200
