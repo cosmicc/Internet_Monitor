@@ -151,6 +151,18 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"Gateway Details" in response.data
     assert b"Internet Performance" in response.data
     assert b"DNS Health" in response.data
+    assert response.data.count(b'class="details-column"') == 1
+    internet_card = response.data.index(b'data-details-card="internet"')
+    secondary_column = response.data.index(b'data-details-column="secondary"')
+    important_card = response.data.index(b'data-details-card="important-hosts"')
+    assert internet_card < response.data.index(b"Internet Performance")
+    assert response.data.index(b"Internet Performance") < secondary_column
+    assert secondary_column < response.data.index(b"Gateway Details")
+    assert response.data.index(b"Gateway Details") < response.data.index(
+        b"DNS Health"
+    )
+    assert response.data.index(b"DNS Health") < important_card
+    assert important_card < response.data.index(b"Important Hosts")
     assert b"Connection degraded" in response.data
     assert b"10.0.0.1" in response.data
     assert b"203.0.113.1" in response.data
@@ -287,6 +299,7 @@ def test_tmpfs_alert_and_dns_gated_important_hosts_render_on_web(
     assert b"Important Hosts" in response.data
     assert b"status.example.com" in response.data
     assert b"api.example.com" in response.data
+    assert b'class="important-sparkline"' in response.data
     assert b"DNS unavailable" in response.data
     assert b"Temporary storage is filling up" in response.data
     assert b"85.00% used" in response.data

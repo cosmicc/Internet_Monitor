@@ -133,14 +133,14 @@ def test_version_surfaces_match_release_version():
     """Package, image defaults, metadata, and released changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.2.1"
     assert _text("VERSION").strip() == __version__
     assert pyproject["project"]["version"] == __version__
     assert pyproject["project"]["readme"] == "README.md"
     assert f"ARG APP_VERSION={__version__}" in _text("Dockerfile")
     assert f"internet-monitor:{__version__}" in _text("docker-compose.yml")
     assert f"internet-monitor:{__version__}" in _text("docker-stack.yml")
-    assert f"## {__version__} - 07.14.2026" in _text("CHANGELOG.md")
+    assert f"## {__version__} - 07.15.2026" in _text("CHANGELOG.md")
 
 
 def test_swarm_prefers_labeled_node_without_preventing_failover():

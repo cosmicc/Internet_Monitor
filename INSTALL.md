@@ -4,7 +4,7 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.2.0 image from GHCR. For
+The default Swarm deployment pulls the versioned 0.2.1 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
 override `IMAGE` with an image published under a test tag.
 
@@ -101,7 +101,7 @@ in a 16 MiB tmpfs.
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.0`. Override
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.1`. Override
 `IMAGE` when testing another registry tag.
 
 From a Swarm manager, label the node that should normally run Internet Monitor:
@@ -181,7 +181,7 @@ survive a restart.
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.2.0`, to match the package
+The workflow requires the release tag, such as `v0.2.1`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.

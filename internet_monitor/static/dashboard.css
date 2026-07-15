@@ -573,7 +573,8 @@ h3 {
 }
 
 .sparkline,
-.table-sparkline {
+.table-sparkline,
+.important-sparkline {
     display: block;
     width: 100%;
     height: 30px;
@@ -582,9 +583,11 @@ h3 {
 
 .sparkline .chart-segment,
 .table-sparkline .chart-segment,
+.important-sparkline .chart-segment,
 .session-chart .chart-segment,
 .sparkline .chart-loss-outage,
 .table-sparkline .chart-loss-outage,
+.important-sparkline .chart-loss-outage,
 .session-chart .chart-loss-outage {
     fill: none;
     stroke-linecap: round;
@@ -593,7 +596,8 @@ h3 {
 }
 
 .sparkline .chart-segment,
-.table-sparkline .chart-segment {
+.table-sparkline .chart-segment,
+.important-sparkline .chart-segment {
     stroke-width: 1.5;
 }
 
@@ -692,7 +696,11 @@ h3 {
 
 .details-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.18fr) minmax(250px, 0.62fr) minmax(0, 1.05fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+        "internet diagnostics"
+        "important important";
+    align-items: start;
     gap: 14px;
 }
 
@@ -700,14 +708,23 @@ h3 {
 .gateway-panel,
 .dns-panel,
 .important-panel,
-.diagnostics-column {
+.details-column {
     min-width: 0;
 }
 
-.diagnostics-column {
+.details-column {
     display: grid;
+    grid-area: diagnostics;
     align-content: start;
     gap: 14px;
+}
+
+.internet-panel {
+    grid-area: internet;
+}
+
+.important-panel {
+    grid-area: important;
 }
 
 .table-wrap {
@@ -859,11 +876,15 @@ h3 {
 
 .gateway-list {
     display: grid;
-    gap: 12px;
+    gap: 9px;
 }
 
 .gateway-detail {
-    padding: 12px;
+    display: grid;
+    grid-template-columns: minmax(150px, 0.75fr) minmax(0, 2fr);
+    align-items: center;
+    gap: 12px;
+    padding: 10px;
     border: 1px solid var(--unknown-border);
     border-radius: 7px;
     background: var(--surface-deep);
@@ -873,7 +894,7 @@ h3 {
     align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
-    margin-bottom: 12px;
+    margin-bottom: 0;
 }
 
 .gateway-heading .secondary {
@@ -884,12 +905,10 @@ h3 {
 
 .compact-metrics {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-}
-
-.compact-metrics > div:last-child {
-    grid-column: 1 / -1;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
 }
 
 .dns-table {
@@ -909,6 +928,7 @@ h3 {
 
 .important-list {
     display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 9px;
 }
 
@@ -965,6 +985,10 @@ h3 {
     font-weight: 600;
 }
 
+.important-sparkline {
+    margin-top: 4px;
+}
+
 .important-skip-notice,
 .important-empty {
     padding: 9px 10px;
@@ -1007,17 +1031,6 @@ h3 {
     font-size: 1rem;
 }
 
-@media (max-width: 1180px) {
-    .details-grid {
-        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.6fr);
-    }
-
-    .diagnostics-column {
-        grid-column: 1 / -1;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
 @media (max-width: 980px) {
     .connection-path {
         grid-template-columns: 1fr;
@@ -1041,6 +1054,22 @@ h3 {
         right: -4px;
         bottom: 0;
         transform: rotate(135deg);
+    }
+}
+
+@media (max-width: 1120px) and (min-width: 761px) {
+    .gateway-detail {
+        display: block;
+    }
+
+    .gateway-heading {
+        margin-bottom: 10px;
+    }
+
+    .compact-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding-left: 0;
+        border-left: 0;
     }
 }
 
@@ -1130,11 +1159,28 @@ h3 {
 
     .details-grid {
         grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "internet"
+            "diagnostics"
+            "important";
     }
 
-    .diagnostics-column {
-        grid-column: auto;
-        grid-template-columns: minmax(0, 1fr);
+    .gateway-detail {
+        display: block;
+    }
+
+    .gateway-heading {
+        margin-bottom: 10px;
+    }
+
+    .compact-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding-left: 0;
+        border-left: 0;
+    }
+
+    .important-list {
+        grid-template-columns: 1fr;
     }
 
     .table-wrap {
@@ -1251,6 +1297,10 @@ h3 {
 
     .compact-metrics {
         grid-template-columns: 1fr 1fr;
+    }
+
+    .compact-metrics > div:last-child {
+        grid-column: 1 / -1;
     }
 }
 
