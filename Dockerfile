@@ -2,12 +2,11 @@ FROM python:3.12-slim
 
 ARG APP_UID=10001
 ARG APP_GID=10001
-ARG APP_VERSION=0.1.2
+ARG APP_VERSION=0.2.0
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FLASK_ENV=production \
-    INTERNET_MONITOR_VERSION=${APP_VERSION}
+    FLASK_ENV=production
 
 LABEL org.opencontainers.image.title="Internet Monitor" \
       org.opencontainers.image.version="${APP_VERSION}" \

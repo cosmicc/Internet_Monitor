@@ -12,6 +12,7 @@ from flask import Flask, abort, jsonify, render_template, request
 from . import __version__
 from .history import VALID_HISTORY_RANGES, load_history_payload
 from .settings import Settings, load_settings
+from .storage import read_storage_status
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -179,6 +180,12 @@ def _empty_dashboard(settings: Settings) -> dict[str, Any]:
             if host
         ],
     }
+    important_configured = bool(settings.monitor.important_hosts)
+    important_status = _format_status("unknown")
+    important_status["text"] = (
+        "Waiting" if important_configured else "Not configured"
+    )
+    storage = read_storage_status(settings.web.history_path)
     return {
         "fresh": False,
         "last_updated": "Waiting for the first monitor check",
@@ -195,6 +202,15 @@ def _empty_dashboard(settings: Settings) -> dict[str, Any]:
         ),
         "internet": internet,
         "gateways": gateways,
+        "important_hosts": {
+            "status": important_status,
+            "configured": important_configured,
+            "skipped": False,
+            "skip_reason": "",
+            "hosts": [
+                _empty_ping(host) for host in settings.monitor.important_hosts
+            ],
+        },
         "dns": {
             "status": unknown,
             "hostname": settings.monitor.dns_host,
@@ -220,6 +236,10 @@ def _empty_dashboard(settings: Settings) -> dict[str, Any]:
         "monitor": {
             "interval_seconds": settings.monitor.interval,
             "loop_duration_ms": None,
+        },
+        "storage": {
+            **storage.as_dict(),
+            "status": _format_status(storage.state),
         },
     }
 
@@ -297,6 +317,41 @@ def load_dashboard(settings: Settings) -> dict[str, Any]:
         targets = dashboard["internet"]["targets"]
     internet["targets"] = targets
 
+    important_data = data.get("important_hosts")
+    if not isinstance(important_data, dict):
+        important_data = {}
+    important_skipped = bool(important_data.get("skipped", False))
+    raw_important_hosts = important_data.get("hosts")
+    important_by_host: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_important_hosts, list):
+        for raw_host in raw_important_hosts:
+            if not isinstance(raw_host, dict):
+                continue
+            host = _safe_text(raw_host.get("host"))
+            if host in settings.monitor.important_hosts:
+                important_by_host[host] = raw_host
+
+    important_hosts: list[dict[str, Any]] = []
+    for host in settings.monitor.important_hosts:
+        important_host = _sanitize_ping(important_by_host.get(host), host)
+        if important_skipped:
+            important_host["status"] = _format_status("unknown")
+            important_host["status"]["text"] = "Skipped"
+        important_hosts.append(important_host)
+
+    important_status = _format_status(important_data.get("state"))
+    if important_skipped:
+        important_status["text"] = "DNS unavailable"
+    elif not settings.monitor.important_hosts:
+        important_status["text"] = "Not configured"
+    important = {
+        "status": important_status,
+        "configured": bool(settings.monitor.important_hosts),
+        "skipped": important_skipped,
+        "skip_reason": _safe_text(important_data.get("skip_reason")),
+        "hosts": important_hosts,
+    }
+
     resolver_data = dns_data.get("resolver")
     if not isinstance(resolver_data, dict):
         resolver_data = {}
@@ -355,6 +410,7 @@ def load_dashboard(settings: Settings) -> dict[str, Any]:
             "diagnosis": diagnosis,
             "internet": internet,
             "gateways": gateways,
+            "important_hosts": important,
             "dns": {
                 "status": _format_status(dns_data.get("state")),
                 "hostname": _safe_text(

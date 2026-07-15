@@ -8,11 +8,10 @@ python -u -m internet_monitor.monitor &
 monitor_pid="$!"
 
 gunicorn \
-  --bind "0.0.0.0:${INTERNET_MONITOR_WEB_PORT:-5005}" \
-  --workers "${INTERNET_MONITOR_WEB_WORKERS:-1}" \
-  --threads "${INTERNET_MONITOR_WEB_THREADS:-2}" \
+  --bind "0.0.0.0:${WEB_PORT:-5005}" \
+  --workers "${WEB_WORKERS:-1}" \
+  --threads "${WEB_THREADS:-2}" \
   --worker-tmp-dir /tmp \
-  --access-logfile - \
   --error-logfile - \
   "internet_monitor.web:create_app()" &
 web_pid="$!"

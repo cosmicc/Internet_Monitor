@@ -1,6 +1,6 @@
 """Collect and serve ephemeral, container-lifetime monitoring history.
 
-The monitor writes a compact atomic JSON snapshot into the container's tmpfs.
+The monitor batches compact atomic JSON snapshots into the container's tmpfs.
 Detailed samples are retained briefly, while minute and hourly aggregates keep
 longer ranges efficient. Nothing in this module writes to persistent storage.
 """
@@ -12,26 +12,37 @@ import logging
 import math
 import os
 import re
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 LOGGER = logging.getLogger(__name__)
-HISTORY_FORMAT_VERSION = 1
-MAX_HISTORY_FILE_BYTES = 56 * 1024 * 1024
-MAX_HISTORY_SERIES = 128
-MAX_HISTORY_RECORDS = 500_000
+HISTORY_FORMAT_VERSION = 2
+MAX_HISTORY_FILE_BYTES = 8 * 1024 * 1024
+MAX_HISTORY_SERIES = 20
+MAX_HISTORY_RECORDS = 25_000
+SNAPSHOT_INTERVAL_SECONDS = 60
+DETAILED_RETENTION_SECONDS = 6 * 60 * 60
+MINUTE_RETENTION_SECONDS = 24 * 60 * 60
+TOTAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 SERIES_ID_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 RANGE_SECONDS = {
     "1h": 60 * 60,
     "6h": 6 * 60 * 60,
     "24h": 24 * 60 * 60,
-    "7d": 7 * 24 * 60 * 60,
+    "30d": TOTAL_RETENTION_SECONDS,
 }
-VALID_HISTORY_RANGES = (*RANGE_SECONDS.keys(), "all")
+TIER_BY_RANGE = {
+    "1h": "detailed",
+    "6h": "detailed",
+    "24h": "minute",
+    "30d": "hourly",
+}
+VALID_HISTORY_RANGES = tuple(RANGE_SECONDS)
 
 # Serialized metrics are [average, maximum loss, minimum, maximum, count].
 SerializedMetric = list[float | int | None]
@@ -165,27 +176,28 @@ class HistoryStore:
         path: str,
         series: Sequence[HistorySeries],
         *,
-        detailed_hours: int = 24,
-        minute_days: int = 30,
         started_at: datetime | None = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.path = path
         self.series = tuple(series)
-        self.detailed_hours = detailed_hours
-        self.minute_days = minute_days
         self.started_at = started_at or datetime.now(timezone.utc)
         self.updated_at: datetime | None = None
         self.detailed: deque[SerializedRecord] = deque()
         self.minute: deque[SerializedRecord] = deque()
         self.hourly: deque[SerializedRecord] = deque()
+        self._monotonic_clock = monotonic_clock
+        self._last_snapshot_monotonic: float | None = None
         self._write_snapshot()
 
     def record(
         self,
         timestamp: datetime,
         values: Mapping[str, HistoryValue],
+        *,
+        publish_snapshot: bool = True,
     ) -> None:
-        """Add one probe cycle to every retention tier and write a snapshot."""
+        """Add one probe cycle and publish history when allowed and due."""
         normalized_timestamp = timestamp.astimezone(timezone.utc)
         epoch_seconds = int(normalized_timestamp.timestamp())
         serialized_values = [
@@ -193,11 +205,37 @@ class HistoryStore:
         ]
 
         self.detailed.append([epoch_seconds, serialized_values])
-        self._append_aggregate(self.minute, epoch_seconds // 60 * 60, serialized_values)
-        self._append_aggregate(self.hourly, epoch_seconds // 3600 * 3600, serialized_values)
+        self._append_aggregate(
+            self.minute,
+            epoch_seconds // 60 * 60,
+            serialized_values,
+        )
+        self._append_aggregate(
+            self.hourly,
+            epoch_seconds // 3600 * 3600,
+            serialized_values,
+        )
         self._prune(epoch_seconds)
         self.updated_at = normalized_timestamp
-        self._write_snapshot()
+        if publish_snapshot:
+            self._publish_snapshot_if_due()
+
+    def flush(self) -> None:
+        """Immediately publish all currently retained records."""
+        if self._write_snapshot():
+            self._last_snapshot_monotonic = self._monotonic_clock()
+
+    def _publish_snapshot_if_due(self) -> None:
+        """Publish once per minute instead of rewriting history each cycle."""
+        now = self._monotonic_clock()
+        if (
+            self._last_snapshot_monotonic is not None
+            and now - self._last_snapshot_monotonic
+            < SNAPSHOT_INTERVAL_SECONDS
+        ):
+            return
+        if self._write_snapshot():
+            self._last_snapshot_monotonic = self._monotonic_clock()
 
     @staticmethod
     def _append_aggregate(
@@ -215,15 +253,18 @@ class HistoryStore:
         records.append([bucket_timestamp, values])
 
     def _prune(self, now_epoch: int) -> None:
-        """Remove detailed and minute records outside their retention windows."""
-        detailed_cutoff = now_epoch - self.detailed_hours * 3600
-        minute_cutoff = now_epoch - self.minute_days * 86400
+        """Remove records outside their fixed chart-resolution windows."""
+        detailed_cutoff = now_epoch - DETAILED_RETENTION_SECONDS
+        minute_cutoff = now_epoch - MINUTE_RETENTION_SECONDS
+        hourly_cutoff = now_epoch - TOTAL_RETENTION_SECONDS
         while self.detailed and self.detailed[0][0] < detailed_cutoff:
             self.detailed.popleft()
         while self.minute and self.minute[0][0] < minute_cutoff:
             self.minute.popleft()
+        while self.hourly and self.hourly[0][0] < hourly_cutoff:
+            self.hourly.popleft()
 
-    def _write_snapshot(self) -> None:
+    def _write_snapshot(self) -> bool:
         """Atomically replace the permission-restricted history snapshot."""
         history_directory = os.path.dirname(self.path) or "/"
         temporary_path = f"{self.path}.tmp.{os.getpid()}"
@@ -236,8 +277,9 @@ class HistoryStore:
                 else None
             ),
             "retention": {
-                "detailed_hours": self.detailed_hours,
-                "minute_days": self.minute_days,
+                "detailed_hours": DETAILED_RETENTION_SECONDS // 3600,
+                "minute_hours": MINUTE_RETENTION_SECONDS // 3600,
+                "total_days": TOTAL_RETENTION_SECONDS // 86400,
             },
             "series": [item.as_dict() for item in self.series],
             "tiers": {
@@ -252,22 +294,24 @@ class HistoryStore:
                 json.dump(data, handle, separators=(",", ":"))
             os.chmod(temporary_path, 0o600)
             os.replace(temporary_path, self.path)
+            return True
         except OSError as exc:
             LOGGER.error("Unable to write ephemeral history snapshot: %s", exc)
             try:
                 os.unlink(temporary_path)
             except OSError:
                 pass
+            return False
 
 
 def _read_history_file(path: str) -> dict[str, object] | None:
     """Read a bounded history snapshot without trusting its structure."""
     try:
-        with Path(path).open("r", encoding="utf-8") as handle:
+        with Path(path).open("rb") as handle:
             raw_history = handle.read(MAX_HISTORY_FILE_BYTES + 1)
     except OSError:
         return None
-    if len(raw_history.encode("utf-8")) > MAX_HISTORY_FILE_BYTES:
+    if len(raw_history) > MAX_HISTORY_FILE_BYTES:
         return None
     try:
         history = json.loads(raw_history)
@@ -376,61 +420,29 @@ def _downsample(
     """Reduce a range to a safe point count with loss-preserving buckets."""
     if len(records) <= maximum_points:
         return records
-    bucket_size = math.ceil(len(records) / maximum_points)
     return [
-        _aggregate_record_group(records[index : index + bucket_size])
-        for index in range(0, len(records), bucket_size)
+        _aggregate_record_group(
+            records[
+                index * len(records) // maximum_points :
+                (index + 1) * len(records) // maximum_points
+            ]
+        )
+        for index in range(maximum_points)
     ]
-
-
-def _parse_retention(raw_retention: object) -> tuple[int, int]:
-    """Return validated retention settings stored with the snapshot."""
-    if not isinstance(raw_retention, dict):
-        return 24, 30
-    detailed_hours = raw_retention.get("detailed_hours")
-    minute_days = raw_retention.get("minute_days")
-    if not isinstance(detailed_hours, int) or not 1 <= detailed_hours <= 168:
-        detailed_hours = 24
-    if not isinstance(minute_days, int) or not 1 <= minute_days <= 365:
-        minute_days = 30
-    return detailed_hours, minute_days
 
 
 def _select_records(
-    tiers: Mapping[str, list[SerializedRecord]],
+    raw_tiers: Mapping[str, object],
     range_name: str,
-    updated_epoch: int,
-    detailed_hours: int,
-    minute_days: int,
+    series_count: int,
 ) -> tuple[list[SerializedRecord], str]:
-    """Select non-overlapping records appropriate for one dashboard range."""
-    if range_name in {"1h", "6h", "24h"}:
-        cutoff = updated_epoch - RANGE_SECONDS[range_name]
-        return (
-            [record for record in tiers["detailed"] if record[0] >= cutoff],
-            "detailed",
-        )
-    if range_name == "7d":
-        cutoff = updated_epoch - RANGE_SECONDS[range_name]
-        return (
-            [record for record in tiers["minute"] if record[0] >= cutoff],
-            "minute",
-        )
-
-    detailed_cutoff = updated_epoch - detailed_hours * 3600
-    minute_cutoff = updated_epoch - minute_days * 86400
-    records = [
-        record for record in tiers["hourly"] if record[0] < minute_cutoff
-    ]
-    records.extend(
-        record
-        for record in tiers["minute"]
-        if minute_cutoff <= record[0] < detailed_cutoff
-    )
-    records.extend(
-        record for record in tiers["detailed"] if record[0] >= detailed_cutoff
-    )
-    return records, "tiered"
+    """Validate only the tier needed for the requested chart resolution."""
+    tier_name = TIER_BY_RANGE[range_name]
+    records = _sanitize_records(raw_tiers.get(tier_name), series_count)
+    if not records:
+        return [], tier_name
+    cutoff = int(records[-1][0]) - RANGE_SECONDS[range_name]
+    return [record for record in records if record[0] >= cutoff], tier_name
 
 
 def empty_history_payload(range_name: str) -> dict[str, object]:
@@ -463,14 +475,8 @@ def load_history_payload(
     raw_tiers = raw_history.get("tiers")
     if not series or not isinstance(raw_tiers, dict):
         return empty_history_payload(range_name)
-    tiers = {
-        name: _sanitize_records(raw_tiers.get(name), len(series))
-        for name in ("detailed", "minute", "hourly")
-    }
-    all_timestamps = [
-        record[0] for records in tiers.values() for record in records
-    ]
-    if not all_timestamps:
+    selected, resolution = _select_records(raw_tiers, range_name, len(series))
+    if not selected:
         return {
             **empty_history_payload(range_name),
             "started_at": _safe_text(raw_history.get("started_at")) or None,
@@ -478,15 +484,6 @@ def load_history_payload(
             "series": series,
         }
 
-    detailed_hours, minute_days = _parse_retention(raw_history.get("retention"))
-    updated_epoch = max(all_timestamps)
-    selected, resolution = _select_records(
-        tiers,
-        range_name,
-        updated_epoch,
-        detailed_hours,
-        minute_days,
-    )
     points = _downsample(selected, maximum_points)
     browser_points = [
         [
@@ -502,9 +499,9 @@ def load_history_payload(
         "started_at": _safe_text(raw_history.get("started_at")) or None,
         "updated_at": _safe_text(raw_history.get("updated_at")) or None,
         "retention": {
-            "detailed_hours": detailed_hours,
-            "minute_days": minute_days,
-            "hourly_for_container_lifetime": True,
+            "detailed_hours": DETAILED_RETENTION_SECONDS // 3600,
+            "minute_hours": MINUTE_RETENTION_SECONDS // 3600,
+            "total_days": TOTAL_RETENTION_SECONDS // 86400,
         },
         "series": series,
         "points": browser_points,

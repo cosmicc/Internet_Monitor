@@ -88,6 +88,28 @@
         </div>
     </section>
 
+    <section
+        class="storage-alert {{ dashboard.storage.status.css_class }}"
+        data-storage-alert
+        data-state="{{ dashboard.storage.status.state }}"
+        aria-live="assertive"
+        {% if dashboard.storage.status.state == "up" %}hidden{% endif %}
+    >
+        <div class="storage-alert-icon" aria-hidden="true">!</div>
+        <div>
+            <h2 data-storage-title>
+                {% if dashboard.storage.status.state == "down" %}Temporary storage critically full{% elif dashboard.storage.status.state == "warning" %}Temporary storage is filling up{% else %}Temporary storage status unavailable{% endif %}
+            </h2>
+            <p data-storage-detail>
+                {% if dashboard.storage.used_percent is not none %}
+                    {{ "%.2f"|format(dashboard.storage.used_percent) }}% used; {{ "%.2f"|format(dashboard.storage.available_bytes / 1048576) }} MiB remains. Monitoring history and status updates may stop if tmpfs fills.
+                {% else %}
+                    The filesystem holding monitoring history could not be measured.
+                {% endif %}
+            </p>
+        </div>
+    </section>
+
     <section class="panel connection-panel" aria-labelledby="connection-path-heading">
         <div class="section-heading">
             <div>
@@ -108,12 +130,12 @@
 
     <section class="panel history-toolbar" aria-labelledby="history-heading">
         <div class="history-copy">
-            <p class="eyebrow">Container lifetime</p>
+            <p class="eyebrow">30-day retention</p>
             <h2 id="history-heading">Monitoring History</h2>
             <p class="history-summary" data-history-summary aria-live="polite">Loading retained history…</p>
         </div>
         <div class="history-ranges" role="group" aria-label="Monitoring history range">
-            {% for range_value, range_label in [("1h", "1h"), ("6h", "6h"), ("24h", "24h"), ("7d", "7d"), ("all", "All")] %}
+            {% for range_value, range_label in [("1h", "1h"), ("6h", "6h"), ("24h", "24h"), ("30d", "30d")] %}
             <button type="button" data-history-range="{{ range_value }}" aria-pressed="{{ 'true' if range_value == history_default_range else 'false' }}">{{ range_label }}</button>
             {% endfor %}
         </div>
@@ -232,6 +254,7 @@
             </div>
         </article>
 
+        <div class="diagnostics-column">
         <article class="panel dns-panel">
             <div class="section-heading">
                 <div>
@@ -284,11 +307,49 @@
                 <div><dt>Slow threshold</dt><dd class="tabular" data-bind="dns-threshold">{{ "%.2f"|format(dashboard.dns.slow_threshold_ms) }} ms</dd></div>
             </dl>
         </article>
+
+        <article class="panel important-panel">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Priority checks</p>
+                    <h2>Important Hosts</h2>
+                </div>
+                {{ status_badge(dashboard.important_hosts.status) }}
+            </div>
+            <p
+                class="important-skip-notice"
+                data-important-skip
+                {% if not dashboard.important_hosts.skipped %}hidden{% endif %}
+            >
+                DNS is unavailable. Host checks are paused to avoid resolution delays.
+            </p>
+            {% if dashboard.important_hosts.hosts %}
+            <div class="important-list">
+                {% for host in dashboard.important_hosts.hosts %}
+                <section class="important-host {{ host.status.css_class }}" data-important-index="{{ loop.index0 }}" data-state="{{ host.status.state }}">
+                    <div class="important-host-heading">
+                        <h3 class="mono" data-important-host>{{ host.host }}</h3>
+                        {{ status_badge(host.status) }}
+                    </div>
+                    <dl class="important-metrics">
+                        <div><dt>Average</dt><dd class="tabular" data-important-average>{{ ping_value(host.average_latency_ms) }}</dd></div>
+                        <div><dt>Packet loss</dt><dd class="tabular" data-important-loss>{% if host.loss_percent is not none %}{{ host.loss_percent }}%{% else %}Unavailable{% endif %}</dd></div>
+                    </dl>
+                    {{ history_sparkline("important-host-" ~ loop.index0, host.host ~ " latency") }}
+                </section>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="important-empty">Set <code>IMPORTANT_HOST_1</code> through <code>IMPORTANT_HOST_3</code> to enable these checks.</p>
+            {% endif %}
+        </article>
+        </div>
     </section>
 
     <footer class="monitor-footer">
         <div><span class="footer-icon" aria-hidden="true">◷</span> Monitor interval: <strong class="tabular" data-bind="monitor-interval">{{ dashboard.monitor.interval_seconds }} seconds</strong></div>
         <div><span class="footer-icon" aria-hidden="true">◎</span> Query: <strong data-bind="query-summary">{{ dashboard.dns.hostname }} ({{ dashboard.dns.record_type }})</strong></div>
+        <div><span class="footer-icon" aria-hidden="true">◫</span> Tmpfs: <strong class="tabular" data-bind="storage-summary">{% if dashboard.storage.used_percent is not none %}{{ "%.2f"|format(dashboard.storage.used_percent) }}% used{% else %}Unavailable{% endif %}</strong></div>
         <div><span class="footer-icon" aria-hidden="true">◷</span> Snapshot age: <strong class="tabular" data-bind="snapshot-age">{% if dashboard.snapshot_age_seconds is not none %}{{ "%.0f"|format(dashboard.snapshot_age_seconds) }} seconds{% else %}Unavailable{% endif %}</strong></div>
     </footer>
 </main>

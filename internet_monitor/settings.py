@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping
 
 import pytz
 
@@ -15,6 +16,8 @@ import pytz
 DEFAULT_STATUS_PATH = "/tmp/internet-monitor/status.json"
 DEFAULT_HISTORY_PATH = "/tmp/internet-monitor/history.json"
 MAX_SECRET_BYTES = 4096
+MAX_DNS_SERVERS = 8
+SAFE_PROBE_HOST_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,253}$")
 
 
 class ConfigurationError(ValueError):
@@ -30,6 +33,7 @@ class MonitorSettings:
     backup_ping_host: str = "8.8.8.8"
     gateway_1_ip: str = ""
     gateway_2_ip: str = ""
+    important_hosts: tuple[str, ...] = ()
     dns_host: str = "www.google.com"
     dns_servers: tuple[str, ...] = ("1.1.1.1", "8.8.8.8")
     dns_record_type: str = "A"
@@ -48,8 +52,6 @@ class MonitorSettings:
     outage_alert_delay_seconds: int = 300
     status_path: str = DEFAULT_STATUS_PATH
     history_path: str = DEFAULT_HISTORY_PATH
-    history_detailed_hours: int = 24
-    history_minute_days: int = 30
     timezone: str = "America/Detroit"
 
 
@@ -95,37 +97,54 @@ def _raw_env(
     env: Mapping[str, str],
     name: str,
     default: str,
-    aliases: Sequence[str] = (),
 ) -> str:
-    """Return the first configured value for a name or one of its aliases."""
-    for key in (name, *aliases):
-        value = env.get(key)
-        if value is not None:
-            return value
-    return default
+    """Return one environment value without legacy-name fallbacks."""
+    return env.get(name, default)
 
 
 def _env_str(
     env: Mapping[str, str],
     name: str,
     default: str = "",
-    aliases: Sequence[str] = (),
 ) -> str:
     """Read a stripped string environment variable."""
-    return _raw_env(env, name, default, aliases).strip()
+    return _raw_env(env, name, default).strip()
 
 
 def _env_required_str(
     env: Mapping[str, str],
     name: str,
     default: str,
-    aliases: Sequence[str] = (),
 ) -> str:
     """Read a non-empty string environment variable."""
-    value = _env_str(env, name, default, aliases)
+    value = _env_str(env, name, default)
     if not value:
         raise ConfigurationError(f"{name} must not be empty.")
     return value
+
+
+def _env_probe_host(
+    env: Mapping[str, str],
+    name: str,
+    default: str = "",
+    *,
+    required: bool = True,
+) -> str:
+    """Read a bounded host or IP value safe for argument-based probe tools."""
+    value = _env_str(env, name, default)
+    if not value:
+        if required:
+            raise ConfigurationError(f"{name} must not be empty.")
+        return ""
+    if value.startswith("-") or not SAFE_PROBE_HOST_PATTERN.fullmatch(value):
+        raise ConfigurationError(
+            f"{name} must be a valid host name or IP address without options, "
+            "whitespace, or control characters."
+        )
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return value
 
 
 def _env_int(
@@ -135,10 +154,9 @@ def _env_int(
     *,
     minimum: int | None = None,
     maximum: int | None = None,
-    aliases: Sequence[str] = (),
 ) -> int:
     """Read and range-check an integer environment variable."""
-    raw = _raw_env(env, name, str(default), aliases).strip()
+    raw = _raw_env(env, name, str(default)).strip()
     try:
         value = int(raw)
     except ValueError as exc:
@@ -183,7 +201,7 @@ def _env_items(env: Mapping[str, str], name: str) -> tuple[str, ...]:
 
 def _env_dns_servers(env: Mapping[str, str]) -> tuple[str, ...]:
     """Read a required, de-duplicated list of DNS server IP addresses."""
-    configured = _env_items(env, "INTERNET_MONITOR_DNS_SERVERS")
+    configured = _env_items(env, "DNS_SERVERS")
     values = configured or ("1.1.1.1", "8.8.8.8")
     servers: list[str] = []
 
@@ -192,13 +210,33 @@ def _env_dns_servers(env: Mapping[str, str]) -> tuple[str, ...]:
             normalized = str(ipaddress.ip_address(value))
         except ValueError as exc:
             raise ConfigurationError(
-                "INTERNET_MONITOR_DNS_SERVERS must contain only IPv4 or IPv6 "
+                "DNS_SERVERS must contain only IPv4 or IPv6 "
                 f"addresses; invalid value: {value!r}."
             ) from exc
         if normalized not in servers:
             servers.append(normalized)
 
+    if len(servers) > MAX_DNS_SERVERS:
+        raise ConfigurationError(
+            "DNS_SERVERS must contain no more than "
+            f"{MAX_DNS_SERVERS} unique addresses."
+        )
+
     return tuple(servers)
+
+
+def _env_important_hosts(env: Mapping[str, str]) -> tuple[str, ...]:
+    """Read up to three optional, de-duplicated important ping hosts."""
+    hosts: list[str] = []
+    for position in range(1, 4):
+        host = _env_probe_host(
+            env,
+            f"IMPORTANT_HOST_{position}",
+            required=False,
+        )
+        if host and host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
 
 
 def _env_optional_ip(env: Mapping[str, str], name: str) -> str:
@@ -232,7 +270,6 @@ def _env_choice(
 def _env_secret(
     env: Mapping[str, str],
     name: str,
-    aliases: Sequence[str] = (),
 ) -> str:
     """Read a secret from ``NAME_FILE`` or directly from ``NAME``.
 
@@ -242,7 +279,7 @@ def _env_secret(
     file_variable = f"{name}_FILE"
     file_path = _env_str(env, file_variable)
     if not file_path:
-        return _env_str(env, name, aliases=aliases)
+        return _env_str(env, name)
 
     try:
         with Path(file_path).open("r", encoding="utf-8") as handle:
@@ -265,7 +302,7 @@ def _validate_timezone(timezone_name: str) -> str:
         pytz.timezone(timezone_name)
     except pytz.UnknownTimeZoneError as exc:
         raise ConfigurationError(
-            f"INTERNET_MONITOR_TIMEZONE is invalid: {timezone_name!r}."
+            f"TIMEZONE is invalid: {timezone_name!r}."
         ) from exc
     return timezone_name
 
@@ -273,167 +310,197 @@ def _validate_timezone(timezone_name: str) -> str:
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     """Load and validate all application settings from the environment."""
     source = os.environ if env is None else env
-    interval = _env_int(source, "INTERNET_MONITOR_INTERVAL", 10, minimum=1)
+    interval = _env_int(
+        source,
+        "INTERVAL",
+        10,
+        minimum=5,
+        maximum=3600,
+    )
     status_path = _env_required_str(
-        source, "INTERNET_MONITOR_STATUS_PATH", DEFAULT_STATUS_PATH
+        source, "STATUS_PATH", DEFAULT_STATUS_PATH
     )
     history_path = _env_required_str(
-        source, "INTERNET_MONITOR_HISTORY_PATH", DEFAULT_HISTORY_PATH
+        source, "HISTORY_PATH", DEFAULT_HISTORY_PATH
     )
     if history_path == status_path:
         raise ConfigurationError(
-            "INTERNET_MONITOR_HISTORY_PATH must differ from "
-            "INTERNET_MONITOR_STATUS_PATH."
+            "HISTORY_PATH must differ from "
+            "STATUS_PATH."
         )
 
     monitor = MonitorSettings(
         log_level=_env_choice(
             source,
-            "INTERNET_MONITOR_LOG_LEVEL",
+            "LOG_LEVEL",
             "INFO",
             {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"},
         ),
-        ping_host=_env_required_str(source, "INTERNET_MONITOR_PING_HOST", "1.1.1.1"),
-        backup_ping_host=_env_str(
-            source, "INTERNET_MONITOR_BACKUP_PING_HOST", "8.8.8.8"
+        ping_host=_env_probe_host(
+            source,
+            "PING_HOST",
+            "1.1.1.1",
         ),
-        gateway_1_ip=_env_optional_ip(source, "INTERNET_MONITOR_GATEWAY_1_IP"),
-        gateway_2_ip=_env_optional_ip(source, "INTERNET_MONITOR_GATEWAY_2_IP"),
-        dns_host=_env_required_str(
-            source, "INTERNET_MONITOR_DNS_HOST", "www.google.com"
+        backup_ping_host=_env_probe_host(
+            source,
+            "BACKUP_PING_HOST",
+            "8.8.8.8",
+            required=False,
+        ),
+        gateway_1_ip=_env_optional_ip(source, "GATEWAY_1_IP"),
+        gateway_2_ip=_env_optional_ip(source, "GATEWAY_2_IP"),
+        important_hosts=_env_important_hosts(source),
+        dns_host=_env_probe_host(
+            source,
+            "DNS_HOST",
+            "www.google.com",
         ),
         dns_servers=_env_dns_servers(source),
         dns_record_type=_env_choice(
-            source, "INTERNET_MONITOR_DNS_RECORD_TYPE", "A", {"A", "AAAA"}
+            source, "DNS_RECORD_TYPE", "A", {"A", "AAAA"}
         ),
         dns_timeout_seconds=_env_int(
-            source, "INTERNET_MONITOR_DNS_TIMEOUT_SECONDS", 5, minimum=1, maximum=30
+            source, "DNS_TIMEOUT_SECONDS", 5, minimum=1, maximum=30
         ),
         dns_slow_threshold_ms=_env_float(
-            source, "INTERNET_MONITOR_DNS_SLOW_THRESHOLD_MS", 500.0, minimum=1.0
+            source, "DNS_SLOW_THRESHOLD_MS", 500.0, minimum=1.0
         ),
-        pings=_env_int(source, "INTERNET_MONITOR_PINGS", 5, minimum=1),
+        pings=_env_int(
+            source,
+            "PINGS",
+            5,
+            minimum=1,
+            maximum=10,
+        ),
         ping_period_ms=_env_int(
-            source, "INTERNET_MONITOR_PING_PERIOD_MS", 1000, minimum=10
+            source,
+            "PING_PERIOD_MS",
+            1000,
+            minimum=100,
+            maximum=5000,
         ),
         ping_timeout_ms=_env_int(
-            source, "INTERNET_MONITOR_PING_TIMEOUT_MS", 1000, minimum=50
+            source,
+            "PING_TIMEOUT_MS",
+            1000,
+            minimum=50,
+            maximum=5000,
         ),
         interval=interval,
-        trigger=_env_int(source, "INTERNET_MONITOR_TRIGGER", 3, minimum=1),
+        trigger=_env_int(source, "TRIGGER", 3, minimum=1),
         high_latency_ms=_env_float(
-            source, "INTERNET_MONITOR_HIGH_LATENCY_MS", 1000.0, minimum=0.0
+            source, "HIGH_LATENCY_MS", 1000.0, minimum=0.0
         ),
         dns_failure_trigger=_env_int(
-            source, "INTERNET_MONITOR_DNS_FAILURE_TRIGGER", 3, minimum=1
+            source, "DNS_FAILURE_TRIGGER", 3, minimum=1
         ),
         max_alerts_per_hour=_env_int(
-            source, "INTERNET_MONITOR_MAX_ALERTS_PER_HOUR", 5, minimum=0
+            source, "MAX_ALERTS_PER_HOUR", 5, minimum=0
         ),
         loss_alert_delay_seconds=_env_int(
-            source, "INTERNET_MONITOR_LOSS_ALERT_DELAY_SECONDS", 300, minimum=0
+            source, "LOSS_ALERT_DELAY_SECONDS", 300, minimum=0
         ),
         latency_alert_delay_seconds=_env_int(
-            source, "INTERNET_MONITOR_LATENCY_ALERT_DELAY_SECONDS", 300, minimum=0
+            source, "LATENCY_ALERT_DELAY_SECONDS", 300, minimum=0
         ),
         outage_alert_delay_seconds=_env_int(
-            source, "INTERNET_MONITOR_OUTAGE_ALERT_DELAY_SECONDS", 300, minimum=0
+            source, "OUTAGE_ALERT_DELAY_SECONDS", 300, minimum=0
         ),
         status_path=status_path,
         history_path=history_path,
-        history_detailed_hours=_env_int(
-            source,
-            "INTERNET_MONITOR_HISTORY_DETAILED_HOURS",
-            24,
-            minimum=24,
-            maximum=168,
-        ),
-        history_minute_days=_env_int(
-            source,
-            "INTERNET_MONITOR_HISTORY_MINUTE_DAYS",
-            30,
-            minimum=30,
-            maximum=365,
-        ),
         timezone=_validate_timezone(
             _env_required_str(
-                source, "INTERNET_MONITOR_TIMEZONE", "America/Detroit"
+                source, "TIMEZONE", "America/Detroit"
             )
         ),
     )
 
+    ping_window_seconds = (
+        (monitor.pings - 1) * monitor.ping_period_ms
+        + monitor.ping_timeout_ms
+        + 999
+    ) // 1000
+    minimum_probe_interval = max(
+        monitor.dns_timeout_seconds,
+        ping_window_seconds,
+    )
+    if monitor.interval < minimum_probe_interval:
+        raise ConfigurationError(
+            "INTERVAL must be at least the longest configured "
+            f"probe window ({minimum_probe_interval} seconds)."
+        )
+
     web = WebSettings(
         title=_env_required_str(
-            source, "INTERNET_MONITOR_WEB_TITLE", "Internet Monitor"
+            source, "WEB_TITLE", "Internet Monitor"
         ),
         port=_env_int(
-            source, "INTERNET_MONITOR_WEB_PORT", 5005, minimum=1, maximum=65535
+            source, "WEB_PORT", 5005, minimum=1, maximum=65535
         ),
-        workers=_env_int(source, "INTERNET_MONITOR_WEB_WORKERS", 1, minimum=1),
-        threads=_env_int(source, "INTERNET_MONITOR_WEB_THREADS", 2, minimum=1),
-        allowed_hosts=_env_items(source, "INTERNET_MONITOR_WEB_ALLOWED_HOSTS"),
+        workers=_env_int(
+            source,
+            "WEB_WORKERS",
+            1,
+            minimum=1,
+            maximum=4,
+        ),
+        threads=_env_int(
+            source,
+            "WEB_THREADS",
+            2,
+            minimum=1,
+            maximum=8,
+        ),
+        allowed_hosts=_env_items(source, "WEB_ALLOWED_HOSTS"),
         status_path=status_path,
         history_path=history_path,
         history_max_points=_env_int(
             source,
-            "INTERNET_MONITOR_HISTORY_MAX_POINTS",
+            "HISTORY_MAX_POINTS",
             720,
             minimum=120,
-            maximum=2000,
+            maximum=720,
         ),
         status_max_age=_env_int(
-            source, "INTERNET_MONITOR_WEB_STATUS_MAX_AGE", 300, minimum=0
+            source, "WEB_STATUS_MAX_AGE", 300, minimum=0
         ),
         refresh_interval=interval,
     )
 
     pushover_retry_initial_seconds = _env_int(
         source,
-        "INTERNET_MONITOR_PUSHOVER_RETRY_INITIAL_SECONDS",
+        "PUSHOVER_RETRY_INITIAL_SECONDS",
         30,
         minimum=1,
         maximum=3600,
     )
     pushover_retry_max_seconds = _env_int(
         source,
-        "INTERNET_MONITOR_PUSHOVER_RETRY_MAX_SECONDS",
+        "PUSHOVER_RETRY_MAX_SECONDS",
         900,
         minimum=1,
         maximum=86400,
     )
     if pushover_retry_max_seconds < pushover_retry_initial_seconds:
         raise ConfigurationError(
-            "INTERNET_MONITOR_PUSHOVER_RETRY_MAX_SECONDS must be greater than "
-            "or equal to INTERNET_MONITOR_PUSHOVER_RETRY_INITIAL_SECONDS."
+            "PUSHOVER_RETRY_MAX_SECONDS must be greater than "
+            "or equal to PUSHOVER_RETRY_INITIAL_SECONDS."
         )
 
     pushover = PushoverSettings(
-        token=_env_secret(
-            source,
-            "INTERNET_MONITOR_PUSHOVER_TOKEN",
-            aliases=("PUSHOVER_TOKEN",),
-        ),
-        user=_env_secret(
-            source,
-            "INTERNET_MONITOR_PUSHOVER_USER",
-            aliases=("PUSHOVER_USER",),
-        ),
-        device=_env_str(
-            source,
-            "INTERNET_MONITOR_PUSHOVER_DEVICE",
-            aliases=("PUSHOVER_DEVICE",),
-        ),
+        token=_env_secret(source, "PUSHOVER_TOKEN"),
+        user=_env_secret(source, "PUSHOVER_USER"),
+        device=_env_str(source, "PUSHOVER_DEVICE"),
         priority=_env_int(
             source,
-            "INTERNET_MONITOR_PUSHOVER_PRIORITY",
+            "PUSHOVER_PRIORITY",
             0,
             minimum=-2,
             maximum=2,
-            aliases=("PUSHOVER_PRIORITY",),
         ),
         timeout_seconds=_env_int(
             source,
-            "INTERNET_MONITOR_PUSHOVER_TIMEOUT_SECONDS",
+            "PUSHOVER_TIMEOUT_SECONDS",
             10,
             minimum=1,
             maximum=60,

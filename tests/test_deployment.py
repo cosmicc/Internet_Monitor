@@ -9,48 +9,49 @@ from internet_monitor import __version__
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ENVIRONMENT_VARIABLES = {
-    "INTERNET_MONITOR_LOG_LEVEL",
-    "INTERNET_MONITOR_PING_HOST",
-    "INTERNET_MONITOR_BACKUP_PING_HOST",
-    "INTERNET_MONITOR_GATEWAY_1_IP",
-    "INTERNET_MONITOR_GATEWAY_2_IP",
-    "INTERNET_MONITOR_DNS_HOST",
-    "INTERNET_MONITOR_DNS_SERVERS",
-    "INTERNET_MONITOR_DNS_RECORD_TYPE",
-    "INTERNET_MONITOR_DNS_TIMEOUT_SECONDS",
-    "INTERNET_MONITOR_DNS_SLOW_THRESHOLD_MS",
-    "INTERNET_MONITOR_PINGS",
-    "INTERNET_MONITOR_PING_PERIOD_MS",
-    "INTERNET_MONITOR_PING_TIMEOUT_MS",
-    "INTERNET_MONITOR_INTERVAL",
-    "INTERNET_MONITOR_TRIGGER",
-    "INTERNET_MONITOR_HIGH_LATENCY_MS",
-    "INTERNET_MONITOR_DNS_FAILURE_TRIGGER",
-    "INTERNET_MONITOR_MAX_ALERTS_PER_HOUR",
-    "INTERNET_MONITOR_LOSS_ALERT_DELAY_SECONDS",
-    "INTERNET_MONITOR_LATENCY_ALERT_DELAY_SECONDS",
-    "INTERNET_MONITOR_OUTAGE_ALERT_DELAY_SECONDS",
-    "INTERNET_MONITOR_STATUS_PATH",
-    "INTERNET_MONITOR_HISTORY_PATH",
-    "INTERNET_MONITOR_HISTORY_DETAILED_HOURS",
-    "INTERNET_MONITOR_HISTORY_MINUTE_DAYS",
-    "INTERNET_MONITOR_HISTORY_MAX_POINTS",
-    "INTERNET_MONITOR_TIMEZONE",
-    "INTERNET_MONITOR_WEB_TITLE",
-    "INTERNET_MONITOR_WEB_PORT",
-    "INTERNET_MONITOR_WEB_WORKERS",
-    "INTERNET_MONITOR_WEB_THREADS",
-    "INTERNET_MONITOR_WEB_ALLOWED_HOSTS",
-    "INTERNET_MONITOR_WEB_STATUS_MAX_AGE",
-    "INTERNET_MONITOR_PUSHOVER_TOKEN",
-    "INTERNET_MONITOR_PUSHOVER_TOKEN_FILE",
-    "INTERNET_MONITOR_PUSHOVER_USER",
-    "INTERNET_MONITOR_PUSHOVER_USER_FILE",
-    "INTERNET_MONITOR_PUSHOVER_DEVICE",
-    "INTERNET_MONITOR_PUSHOVER_PRIORITY",
-    "INTERNET_MONITOR_PUSHOVER_TIMEOUT_SECONDS",
-    "INTERNET_MONITOR_PUSHOVER_RETRY_INITIAL_SECONDS",
-    "INTERNET_MONITOR_PUSHOVER_RETRY_MAX_SECONDS",
+    "LOG_LEVEL",
+    "PING_HOST",
+    "BACKUP_PING_HOST",
+    "GATEWAY_1_IP",
+    "GATEWAY_2_IP",
+    "IMPORTANT_HOST_1",
+    "IMPORTANT_HOST_2",
+    "IMPORTANT_HOST_3",
+    "DNS_HOST",
+    "DNS_SERVERS",
+    "DNS_RECORD_TYPE",
+    "DNS_TIMEOUT_SECONDS",
+    "DNS_SLOW_THRESHOLD_MS",
+    "PINGS",
+    "PING_PERIOD_MS",
+    "PING_TIMEOUT_MS",
+    "INTERVAL",
+    "TRIGGER",
+    "HIGH_LATENCY_MS",
+    "DNS_FAILURE_TRIGGER",
+    "MAX_ALERTS_PER_HOUR",
+    "LOSS_ALERT_DELAY_SECONDS",
+    "LATENCY_ALERT_DELAY_SECONDS",
+    "OUTAGE_ALERT_DELAY_SECONDS",
+    "STATUS_PATH",
+    "HISTORY_PATH",
+    "HISTORY_MAX_POINTS",
+    "TIMEZONE",
+    "WEB_TITLE",
+    "WEB_PORT",
+    "WEB_WORKERS",
+    "WEB_THREADS",
+    "WEB_ALLOWED_HOSTS",
+    "WEB_STATUS_MAX_AGE",
+    "PUSHOVER_TOKEN",
+    "PUSHOVER_TOKEN_FILE",
+    "PUSHOVER_USER",
+    "PUSHOVER_USER_FILE",
+    "PUSHOVER_DEVICE",
+    "PUSHOVER_PRIORITY",
+    "PUSHOVER_TIMEOUT_SECONDS",
+    "PUSHOVER_RETRY_INITIAL_SECONDS",
+    "PUSHOVER_RETRY_MAX_SECONDS",
 }
 
 
@@ -74,25 +75,59 @@ def test_runtime_environment_contract_is_documented_in_both_deployments():
 def test_deployments_do_not_persist_application_state_or_logs():
     """Compose and Swarm should expose only ephemeral tmpfs runtime state."""
     deployment_text = _text("docker-compose.yml") + _text("docker-stack.yml")
+    entrypoint = _text("entrypoint.sh")
 
     assert "type: tmpfs" in deployment_text
     assert "/tmp" in deployment_text
     assert "internet-monitor-data" not in deployment_text
     assert "connection.log" not in deployment_text
-    assert "INTERNET_MONITOR_LOG_PATH" not in deployment_text
-    assert deployment_text.count("size: 67108864") == 2
+    assert "LOG_PATH" not in deployment_text
+    assert deployment_text.count("size: 16777216") == 2
+    assert "--access-logfile" not in entrypoint
+    assert "HISTORY_DETAILED_HOURS" not in deployment_text
+    assert "HISTORY_MINUTE_DAYS" not in deployment_text
+
+
+def test_runtime_contract_contains_no_legacy_prefixes():
+    """The v0.2.0 clean break should expose only the short variable names."""
+    active_contract = "".join(
+        _text(path)
+        for path in (
+            ".env.example",
+            "docker-compose.yml",
+            "docker-stack.yml",
+            "docker-stack.secrets.yml",
+            "entrypoint.sh",
+            "internet_monitor/settings.py",
+            "internet_monitor/healthcheck.py",
+        )
+    )
+
+    assert "INTERNET_MONITOR_" not in active_contract
 
 
 def test_version_surfaces_match_release_version():
     """Package, image defaults, metadata, and released changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.1.2"
+    assert __version__ == "0.2.0"
+    assert _text("VERSION").strip() == __version__
     assert pyproject["project"]["version"] == __version__
+    assert pyproject["project"]["readme"] == "README.md"
     assert f"ARG APP_VERSION={__version__}" in _text("Dockerfile")
     assert f"internet-monitor:{__version__}" in _text("docker-compose.yml")
     assert f"internet-monitor:{__version__}" in _text("docker-stack.yml")
-    assert f"## {__version__} - 07.13.2026" in _text("CHANGELOG.md")
+    assert f"## {__version__} - 07.14.2026" in _text("CHANGELOG.md")
+
+
+def test_swarm_prefers_labeled_node_without_preventing_failover():
+    """Swarm should prefer the monitor node but retain unlabeled fallbacks."""
+    stack = _text("docker-stack.yml")
+
+    assert "preferences:" in stack
+    assert "spread: node.labels.internet-monitor" in stack
+    assert "node.labels.internet-monitor ==" not in stack
+    assert "node.labels.internet-monitor==" not in stack
 
 
 def test_release_workflow_is_release_only_and_publishes_ghcr_image():

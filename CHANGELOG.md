@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.2.0 - 07.14.2026
+
+### Added
+
+- Added a soft Swarm placement preference for nodes carrying the
+  `internet-monitor` label.
+- Added operator instructions for labeling the preferred node and reconciling
+  the service after that node returns.
+- Added the root `VERSION` file as a simple version reference for operators and
+  scripts.
+- Added a compact Important Hosts dashboard card with up to three configurable
+  fping targets, DNS-aware skipping, retained history, and independent alerts.
+- Added live tmpfs capacity reporting with web and Pushover warning, critical,
+  measurement-failure, and recovery transitions.
+
+### Changed
+
+- Changed all package, container, deployment, and documentation version surfaces
+  to 0.2.0.
+- Changed every active environment variable to its shorter unprefixed name. The
+  former `INTERNET_MONITOR_` names are intentionally unsupported in this clean
+  configuration break.
+- Shortened the DNS Health card and placed Important Hosts in the newly available
+  dashboard space while preserving responsive layouts.
+- Documented that Swarm can reschedule the single monitor task onto an eligible
+  unlabeled node when the preferred node is unavailable.
+- Changed complete tmpfs history snapshot publication from every probe to an
+  at-most-once-per-minute cadence while retaining every probe in memory and
+  keeping live status updates at the configured interval.
+- Changed history retention to resolution-matched tiers: exact samples for 6
+  hours, minute summaries for 24 hours, and hourly summaries for 30 days.
+- Changed the longest dashboard range from 7d to 30d and removed the unbounded
+  All range.
+- Reused one bounded probe executor across cycles instead of recreating worker
+  threads every interval, and moved ordered Pushover delivery to one background
+  worker so notification timeouts cannot delay monitoring.
+- Reduced the ephemeral `/tmp` limit from 64 MiB to 16 MiB after bounding the
+  history file and record count.
+- Reduced recurring container work by using a minimal standard-library health
+  check and disabling routine dashboard access logs while preserving errors.
+- Changed repeated per-cycle issue details to debug logging after the initial
+  warning; alert thresholds, state changes, and recoveries remain visible at
+  normal log levels.
+- Replaced configurable, unbounded-lifetime history tiers with the fixed 30-day
+  contract; the retired `HISTORY_DETAILED_HOURS` and
+  `HISTORY_MINUTE_DAYS` variables are no longer used.
+- Bounded probe counts, timing, DNS-server count, web concurrency, and chart
+  points, and reject configurations whose probe window cannot fit the monitor
+  interval.
+
+### Fixed
+
+- Fixed Swarm placement so the single monitor task considers the
+  operator-designated node before other eligible nodes without sacrificing
+  automatic failover.
+- Fixed steadily increasing background CPU usage caused by serializing the
+  entire growing history dataset after every monitoring cycle.
+- Fixed potentially unbounded system-resolver delays by using a timeout-controlled
+  NSS lookup subprocess.
+- Fixed avoidable history API work by validating only the tier needed for the
+  requested range and reading the bounded snapshot without a duplicate encoding.
+- Fixed chart rendering overhead by combining hundreds of SVG line elements into
+  compact paths while retaining loss and outage styling.
+- Fixed routine Pushover network delays blocking the next monitoring cycle.
+- Fixed aggregate bucket timestamps drawing a startup chart segment outside its
+  visible range.
+- Fixed priority hostname checks creating avoidable delays or false failures
+  during DNS outages by skipping them until the system resolver and one direct
+  DNS server respond.
+- Fixed priority hostname checks waiting for every configured DNS timeout by
+  starting them as soon as the first usable direct DNS result arrives.
+- Fixed a full tmpfs becoming invisible after JSON writes fail by measuring
+  capacity independently in the web process.
+- Fixed repeated writes under critical tmpfs pressure by retaining new history
+  in memory, pausing history publication, and skipping status writes only when
+  no space remains; publication resumes automatically after recovery.
+- Fixed Python distribution metadata so wheel and source package pages include
+  the project README as their long description.
+
 ## 0.1.2 - 07.13.2026
 
 ### Added
@@ -53,7 +132,7 @@
 ### Added
 
 - Added direct `dig` checks against every server in
-  `INTERNET_MONITOR_DNS_SERVERS`, with response timing and configurable record
+  `DNS_SERVERS`, with response timing and configurable record
   type, timeout, slow-response threshold, and consecutive-failure trigger.
 - Added independent Pushover failure, slow-response, and recovery alerts for each
   configured DNS server.
@@ -79,7 +158,7 @@
 - Moved all operator-controlled behavior into validated Docker environment
   variables synchronized across `.env.example`, Compose, and Swarm.
 - Changed application logging to human-readable stdout output for Docker and
-  added the configurable `INTERNET_MONITOR_LOG_LEVEL` setting.
+  added the configurable `LOG_LEVEL` setting.
 - Changed current dashboard state to an atomic, permission-restricted snapshot
   inside the container's `/tmp` tmpfs.
 - Changed ping, gateway, system-resolver, and per-server DNS probes to run in one
