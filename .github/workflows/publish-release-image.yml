@@ -31,11 +31,13 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Verify release tag matches the package version
+        id: version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           package_version="$(python -c 'from internet_monitor import __version__; print(__version__)')"
           test "${RELEASE_TAG#v}" = "${package_version}"
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
         run: python -m pytest
@@ -68,8 +70,7 @@ jobs:
         with:
           images: ghcr.io/cosmicc/internet-monitor
           tags: |
-            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }}
+            type=raw,value=${{ steps.version.outputs.package_version }}
             type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
 
       - name: Build and publish the release image
@@ -80,6 +81,6 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          build-args: APP_VERSION=${{ steps.metadata.outputs.version }}
+          build-args: APP_VERSION=${{ steps.version.outputs.package_version }}
           provenance: true
           sbom: true

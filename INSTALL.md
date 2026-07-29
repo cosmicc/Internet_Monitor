@@ -4,7 +4,7 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.2.2 image from GHCR. For
+The default Swarm deployment pulls the versioned 0.3 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
 override `IMAGE` with an image published under a test tag.
 
@@ -101,7 +101,7 @@ in a 16 MiB tmpfs.
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.2.2`. Override
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.3`. Override
 `IMAGE` when testing another registry tag.
 
 From a Swarm manager, label the node that should normally run Internet Monitor:
@@ -234,7 +234,7 @@ survive a restart.
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.2.2`, to match the package
+The workflow requires the release tag, such as `v0.3`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.
@@ -288,6 +288,15 @@ or DNS failure, weighted average latency, and minimum/maximum latency in each
 displayed interval. `HISTORY_MAX_POINTS` limits response and
 browser chart size. Keep `HISTORY_PATH` on the container tmpfs;
 pointing it at persistent storage changes the approved storage model.
+
+### Upgrading From 0.2.2 To 0.3
+
+Redeploy the service with the `0.3` image. No environment-variable or persistent
+data migration is required. The container restart intentionally begins a fresh
+ephemeral history window, now including container CPU and memory observations.
+
+Container memory always shows current MiB. It also shows a percentage when the
+deployment applies a finite Docker memory limit.
 
 ### Upgrading From 0.2.1 To 0.2.2
 

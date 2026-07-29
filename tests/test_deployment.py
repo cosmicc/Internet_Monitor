@@ -133,7 +133,7 @@ def test_version_surfaces_match_release_version():
     """Package, image defaults, metadata, and changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.2.2"
+    assert __version__ == "0.3"
     assert _text("VERSION").strip() == __version__
     assert pyproject["project"]["version"] == __version__
     assert pyproject["project"]["readme"] == "README.md"
@@ -143,7 +143,7 @@ def test_version_surfaces_match_release_version():
     assert f"ARG APP_VERSION={__version__}" in _text("Dockerfile")
     assert f"internet-monitor:{__version__}" in _text("docker-compose.yml")
     assert f"internet-monitor:{__version__}" in _text("docker-stack.yml")
-    assert f"## {__version__} - 07.15.2026" in _text("CHANGELOG.md")
+    assert f"## {__version__} - 07.29.2026" in _text("CHANGELOG.md")
 
 
 def test_stack_leaves_dynamic_placement_to_the_manager_reconciler():
@@ -174,4 +174,5 @@ def test_release_workflow_is_release_only_and_publishes_ghcr_image():
     assert not re.search(r"^\s{2}push:", workflow, re.MULTILINE)
     assert "python -m build" in workflow
     assert "ghcr.io/cosmicc/internet-monitor" in workflow
+    assert "type=raw,value=${{ steps.version.outputs.package_version }}" in workflow
     assert "push: true" in workflow

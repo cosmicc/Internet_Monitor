@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3 - 07.29.2026
+
+### Added
+
+- Added container-scoped CPU and memory values with retained sparklines to the
+  Server topology card.
+- Added two compact millisecond y-axis labels to the large Active-target latency
+  graph so its dynamic vertical scale is visible.
+
+### Changed
+
+- Increased all compact history graph heights by approximately 75% for easier
+  trend reading on desktop and mobile.
+- Changed active application, package, image, and release versioning to the
+  two-level format beginning with 0.3 while preserving historical versions.
+- Extended the existing ephemeral 1-hour, 6-hour, 24-hour, and 30-day history
+  ranges to container CPU and memory without adding persistent storage.
+
+### Fixed
+
+- Fixed ambiguity in the large latency graph by showing its current upper scale
+  and zero baseline instead of leaving the vertical range unlabeled.
+- Fixed compact Gateway Details headings so long status badges no longer crowd
+  gateway names at wide desktop layouts.
+- Kept memory percentages unavailable when Docker has no finite cgroup memory
+  limit instead of comparing container usage with host-wide memory.
+
 ## 0.2.2 - 07.15.2026
 
 ### Added

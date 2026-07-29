@@ -30,6 +30,32 @@
     </div>
     {% if node.id == "server" %}
         <div class="server-active">Monitor process active</div>
+        <div class="server-resources">
+            <section class="server-resource">
+                <div class="server-resource-heading">
+                    <span>CPU</span>
+                    <strong class="tabular" data-server-cpu>
+                        {% if node.resources.cpu_usage_percent is not none %}{{ "%.2f"|format(node.resources.cpu_usage_percent) }}%{% else %}Unavailable{% endif %}
+                    </strong>
+                </div>
+                {{ history_sparkline("container-cpu", "Container CPU usage", "cpu", "sparkline server-sparkline") }}
+            </section>
+            <section class="server-resource">
+                <div class="server-resource-heading">
+                    <span>Memory</span>
+                    <strong class="tabular" data-server-memory>
+                        {% if node.resources.memory_usage_mib is none %}
+                            Unavailable
+                        {% elif node.resources.memory_limit_mib is not none and node.resources.memory_usage_percent is not none %}
+                            {{ "%.2f"|format(node.resources.memory_usage_mib) }} / {{ "%.2f"|format(node.resources.memory_limit_mib) }} MiB ({{ "%.2f"|format(node.resources.memory_usage_percent) }}%)
+                        {% else %}
+                            {{ "%.2f"|format(node.resources.memory_usage_mib) }} MiB
+                        {% endif %}
+                    </strong>
+                </div>
+                {{ history_sparkline("container-memory", "Container memory usage", "memory", "sparkline server-sparkline") }}
+            </section>
+        </div>
     {% else %}
         <div class="node-metrics">
             <span>Avg <strong data-node-average>{{ ping_value(node.average_latency_ms) }}</strong></span>
@@ -244,13 +270,17 @@
                 <span><i class="legend-line legend-latency" aria-hidden="true"></i>Latency</span>
                 <span><i class="legend-line legend-loss" aria-hidden="true"></i>Packet loss</span>
             </div>
-            <svg class="session-chart" data-sparkline="internet" data-chart-label="Active Internet target latency" data-chart-kind="ping" viewBox="0 0 600 170" preserveAspectRatio="none" role="img" aria-label="Active Internet target latency history; no samples recorded yet">
-                <line data-grid-line x1="0" y1="25" x2="600" y2="25"></line>
-                <line data-grid-line x1="0" y1="85" x2="600" y2="85"></line>
-                <line data-grid-line x1="0" y1="145" x2="600" y2="145"></line>
-                <g data-series aria-hidden="true"></g>
-                <g data-loss-series aria-hidden="true"></g>
-            </svg>
+            <div class="session-chart-wrap">
+                <span class="chart-y-marker chart-y-marker-upper tabular" data-y-axis-maximum>— ms</span>
+                <span class="chart-y-marker chart-y-marker-lower tabular">0 ms</span>
+                <svg class="session-chart" data-sparkline="internet" data-chart-label="Active Internet target latency" data-chart-kind="ping" data-y-axis="latency" viewBox="0 0 600 170" preserveAspectRatio="none" role="img" aria-label="Active Internet target latency history; no samples recorded yet">
+                    <line data-grid-line x1="42" y1="25" x2="600" y2="25"></line>
+                    <line data-grid-line x1="42" y1="85" x2="600" y2="85"></line>
+                    <line data-grid-line x1="42" y1="145" x2="600" y2="145"></line>
+                    <g data-series aria-hidden="true"></g>
+                    <g data-loss-series aria-hidden="true"></g>
+                </svg>
+            </div>
             <div class="chart-axis"><span data-history-axis-start>24 hours ago</span><span>Now</span></div>
         </article>
 

@@ -1,6 +1,6 @@
 # Internet Monitor
 
-Internet Monitor 0.2.2 is a Docker-first Python service for Internet and gateway
+Internet Monitor 0.3 is a Docker-first Python service for Internet and gateway
 reachability, packet loss, latency, system DNS resolution, and direct DNS-server
 health checks.
 
@@ -18,6 +18,8 @@ health checks.
 - Displays a live Server → Gateway 1 → Gateway 2 → Internet topology, detailed
   ping statistics, and 30 days of shared ping/DNS history that marks packet loss
   and failed DNS checks in red.
+- Shows container-scoped CPU and memory usage with the same ephemeral retained
+  history, without requiring host mounts or Docker socket access.
 - Sends independent Pushover alerts for gateways, DNS servers, and important
   hosts, with queued delivery retries and capped exponential backoff.
 - Shows web and Pushover warnings when ephemeral `/tmp` usage reaches 80%, and
@@ -68,11 +70,13 @@ The dashboard is published on port `5005` by default. Its light or dark theme
 follows the device setting until the browser saves a manual choice. It polls the
 sanitized same-origin status endpoint at the monitor interval without reloading
 the page. History controls provide 1 hour, 6 hour, 24 hour, and 30 day views for
-gateways, Internet targets, the system resolver, configured DNS servers, and
-important hosts. On desktop, Internet Performance sits beside compact Gateway
-and DNS cards, with up to three Important Hosts arranged in a full-width row
-below. The cards collapse to a single stack on mobile. The page also reports the
-live capacity of the ephemeral tmpfs.
+container CPU and memory, gateways, Internet targets, the system resolver,
+configured DNS servers, and important hosts. Container memory includes a
+percentage when the deployment sets a finite memory limit; otherwise it shows
+current MiB. On desktop, Internet Performance sits beside compact Gateway and
+DNS cards, with up to three Important Hosts arranged in a full-width row below.
+The cards collapse to a single stack on mobile. The page also reports the live
+capacity of the ephemeral tmpfs.
 `WEB_ALLOWED_HOSTS` can restrict direct client addresses;
 forwarded addresses are not trusted unless reverse-proxy support is added later.
 

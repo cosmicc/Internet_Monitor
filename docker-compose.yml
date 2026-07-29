@@ -1,11 +1,11 @@
 services:
   internet-monitor:
-    image: ${IMAGE:-internet-monitor:0.2.2}
+    image: ${IMAGE:-internet-monitor:0.3}
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: "0.2.2"
+        APP_VERSION: "0.3"
     restart: unless-stopped
     read_only: true
     cap_drop:

@@ -52,6 +52,14 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "interval_seconds": 15,
                     "loop_duration_ms": 125.5,
+                    "container": {
+                        "cpu_usage_percent": 3.25,
+                        "memory_usage_bytes": 52_428_800,
+                        "memory_limit_bytes": 209_715_200,
+                        "memory_usage_percent": 25.0,
+                        "memory_usage_mib": 50.0,
+                        "memory_limit_mib": 200.0,
+                    },
                     "diagnosis": {
                         "state": "warning",
                         "title": "Connection degraded",
@@ -169,6 +177,11 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"1.1.1.1" in response.data
     assert b"11.00 ms" in response.data
     assert b"725.00 ms" in response.data
+    assert b"3.25%" in response.data
+    assert b"50.00 / 200.00 MiB (25.00%)" in response.data
+    assert b'data-sparkline="container-cpu"' in response.data
+    assert b'data-sparkline="container-memory"' in response.data
+    assert b'data-y-axis-maximum' in response.data
     assert b"red marks loss" in response.data
     assert b"data-loss-series" in response.data
     assert b"Monitoring History" in response.data
@@ -204,12 +217,15 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"prefers-color-scheme: dark" in script_response.data
     assert b"internet-monitor-theme" in script_response.data
     assert b"localStorage.setItem" in script_response.data
+    assert b"Latest usage is" in script_response.data
+    assert b"data-y-axis-maximum" in script_response.data
 
     api_response = create_app(settings).test_client().get("/api/status")
     assert api_response.status_code == 200
     api_data = api_response.get_json()
     assert api_data["diagnosis"]["title"] == "Connection degraded"
     assert api_data["path_nodes"][1]["label"] == "Gateway 1"
+    assert api_data["path_nodes"][0]["resources"]["cpu_usage_percent"] == 3.25
     assert api_data["internet"]["targets"][1]["role"] == "Backup"
     assert api_data["dns"]["servers"][0]["response_status"] == "NOERROR"
 

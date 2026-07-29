@@ -15,6 +15,8 @@ Internet Monitor is a Docker-first Python service. Application code lives in
   history in a compact, permission-restricted tmpfs snapshot.
 - `storage.py` measures the filesystem holding runtime snapshots and applies the
   fixed temporary-storage warning and critical thresholds.
+- `resources.py` reads container-scoped CPU and memory usage from Linux cgroups
+  without Docker socket access, host filesystem mounts, or added privileges.
 - `web.py` exposes the Flask status dashboard, sanitized live status and history
   endpoints, and health endpoint.
 - `healthcheck.py` is the Docker health-check entry point.
@@ -47,10 +49,17 @@ tmpfs, so neither file is durable storage. Keep exact probe samples for 6 hours,
 minute summaries for 24 hours, and hourly summaries for 30 days. Nothing older
 than 30 days may remain. Downsampling and aggregation must preserve maximum loss
 or DNS failure values, weighted latency averages, and minimum/maximum latency.
-Collect every probe in memory, but publish the complete atomic history snapshot
-at most once per minute instead of after every probe. Alert counters, the ordered
-Pushover retry queue, status, and history all reset on container restart or
-redeploy; a browser reload must not clear published history.
+Collect every probe and container CPU/memory observation in memory, but publish
+the complete atomic history snapshot at most once per minute instead of after
+every probe. Alert counters, the ordered Pushover retry queue, status, and
+history all reset on container restart or redeploy; a browser reload must not
+clear published history.
+
+Container CPU is the percentage of the CPU allocation visible through the
+container's cgroup. Container memory always reports current MiB when available
+and reports a percentage only when Docker provides a finite cgroup memory
+limit. Do not substitute host-wide `/proc` values, mount the host filesystem, or
+add Docker socket access for these dashboard metrics.
 
 Measure the filesystem holding `HISTORY_PATH` every monitor cycle and again when
 serving dashboard status. A usage level of 80% is warning and 95% is critical.
@@ -178,6 +187,13 @@ must keep `internet_monitor/__init__.py`, `pyproject.toml`, Docker image default
 and the changelog aligned. Do not create a tag or release unless explicitly
 requested.
 
+Beginning with version 0.3, active application, Python package, Docker image, Git
+tag, and GitHub Release versions use two levels (`major.minor`). Preserve older
+three-level version numbers in historical changelog entries, upgrade headings,
+and other historical documentation. The release workflow must tag GHCR with the
+validated two-level package version and `latest` for a stable release; do not
+depend on three-level semantic-version metadata expansion.
+
 ## Web And Security
 
 The approved visual contract uses the Operational Dark palette in
@@ -195,6 +211,11 @@ Performance on the left, keep compact Gateway Details above DNS Health on the
 right, and place Important Hosts in one full-width row below with up to three
 equal host cards. At 760 px and below, the cards must collapse into the
 overflow-free order Internet, Gateway Details, DNS Health, then Important Hosts.
+
+The Server topology card shows container CPU and memory values with retained
+sparklines. Keep the small history graphs approximately 75% taller than the
+original 30 px treatment. The large Active-target latency graph shows only two
+small dynamic y-axis labels: its current upper scale in milliseconds and 0 ms.
 
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` and `/api/history` endpoints. History ranges

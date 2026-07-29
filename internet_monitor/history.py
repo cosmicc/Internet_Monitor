@@ -339,7 +339,7 @@ def _sanitize_series(raw_series: object) -> list[dict[str, str]]:
             return []
         seen_ids.add(series_id)
         kind = _safe_text(item.get("kind"), 16)
-        if kind not in {"ping", "dns"}:
+        if kind not in {"ping", "dns", "cpu", "memory"}:
             return []
         series.append(
             {

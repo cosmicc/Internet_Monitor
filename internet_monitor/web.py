@@ -86,6 +86,58 @@ def _number(value: object) -> float | int | None:
     return value
 
 
+def _nonnegative_number(value: object) -> float | int | None:
+    """Return a finite non-negative number from an untrusted snapshot."""
+    number = _number(value)
+    if number is None or number < 0:
+        return None
+    return number
+
+
+def _percentage(value: object) -> float | int | None:
+    """Return a finite percentage clamped to its meaningful display range."""
+    number = _nonnegative_number(value)
+    if number is None:
+        return None
+    return min(100, number)
+
+
+def _empty_container_resources() -> dict[str, float | int | None]:
+    """Build the unavailable container-resource display contract."""
+    return {
+        "cpu_usage_percent": None,
+        "memory_usage_bytes": None,
+        "memory_limit_bytes": None,
+        "memory_usage_percent": None,
+        "memory_usage_mib": None,
+        "memory_limit_mib": None,
+    }
+
+
+def _sanitize_container_resources(raw_resources: object) -> dict[str, float | int | None]:
+    """Sanitize container-only CPU and memory values from the status snapshot."""
+    if not isinstance(raw_resources, dict):
+        return _empty_container_resources()
+    return {
+        "cpu_usage_percent": _percentage(raw_resources.get("cpu_usage_percent")),
+        "memory_usage_bytes": _nonnegative_number(
+            raw_resources.get("memory_usage_bytes")
+        ),
+        "memory_limit_bytes": _nonnegative_number(
+            raw_resources.get("memory_limit_bytes")
+        ),
+        "memory_usage_percent": _percentage(
+            raw_resources.get("memory_usage_percent")
+        ),
+        "memory_usage_mib": _nonnegative_number(
+            raw_resources.get("memory_usage_mib")
+        ),
+        "memory_limit_mib": _nonnegative_number(
+            raw_resources.get("memory_limit_mib")
+        ),
+    }
+
+
 def _empty_ping(host: str = "", *, configured: bool = True) -> dict[str, Any]:
     """Build an unknown ping result for startup or stale status."""
     status = _format_status("unknown")
@@ -133,6 +185,7 @@ def _sanitize_ping(
 def _path_nodes(
     *,
     server_state: str,
+    container_resources: dict[str, float | int | None],
     gateways: list[dict[str, Any]],
     internet: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -143,6 +196,7 @@ def _path_nodes(
             "id": "server",
             "label": "Server",
             "status": _format_status(server_state),
+            "resources": container_resources,
         }
     )
     nodes = [server]
@@ -186,6 +240,7 @@ def _empty_dashboard(settings: Settings) -> dict[str, Any]:
         "Waiting" if important_configured else "Not configured"
     )
     storage = read_storage_status(settings.web.history_path)
+    container_resources = _empty_container_resources()
     return {
         "fresh": False,
         "last_updated": "Waiting for the first monitor check",
@@ -197,9 +252,11 @@ def _empty_dashboard(settings: Settings) -> dict[str, Any]:
         },
         "path_nodes": _path_nodes(
             server_state="unknown",
+            container_resources=container_resources,
             gateways=gateways,
             internet=internet,
         ),
+        "container": container_resources,
         "internet": internet,
         "gateways": gateways,
         "important_hosts": {
@@ -401,6 +458,7 @@ def load_dashboard(settings: Settings) -> dict[str, Any]:
             "The monitor did not provide a path diagnosis.",
         ),
     }
+    container_resources = _sanitize_container_resources(data.get("container"))
 
     dashboard.update(
         {
@@ -408,6 +466,7 @@ def load_dashboard(settings: Settings) -> dict[str, Any]:
             "last_updated": _safe_text(data.get("timestamp"), "Unknown"),
             "snapshot_age_seconds": _snapshot_age_seconds(data.get("timestamp")),
             "diagnosis": diagnosis,
+            "container": container_resources,
             "internet": internet,
             "gateways": gateways,
             "important_hosts": important,
@@ -433,6 +492,7 @@ def load_dashboard(settings: Settings) -> dict[str, Any]:
     )
     dashboard["path_nodes"] = _path_nodes(
         server_state="up",
+        container_resources=container_resources,
         gateways=gateways,
         internet=internet,
     )

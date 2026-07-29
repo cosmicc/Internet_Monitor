@@ -53,6 +53,12 @@ def test_write_status_uses_ephemeral_path_and_includes_dns_timings(tmp_path: Pat
     )
     resolver_result = monitor.ResolverResult("up", 8.2)
     dns_results = [monitor.DnsQueryResult("1.1.1.1", "up", 10.0, "NOERROR", 1)]
+    container_resources = monitor.ContainerResources(
+        cpu_usage_percent=3.25,
+        memory_usage_bytes=52_428_800,
+        memory_limit_bytes=209_715_200,
+        memory_usage_percent=25.0,
+    )
 
     monitor.write_status(
         settings,
@@ -64,6 +70,7 @@ def test_write_status_uses_ephemeral_path_and_includes_dns_timings(tmp_path: Pat
         dns_results,
         monitor.Diagnosis("up", "Connection healthy", "Everything responds."),
         123.45,
+        container_resources=container_resources,
     )
 
     data = json.loads(status_path.read_text(encoding="utf-8"))
@@ -73,6 +80,9 @@ def test_write_status_uses_ephemeral_path_and_includes_dns_timings(tmp_path: Pat
     assert data["internet"]["maximum_latency_ms"] == 14.0
     assert data["internet"]["transmitted"] == 5
     assert data["diagnosis"]["title"] == "Connection healthy"
+    assert data["container"]["cpu_usage_percent"] == 3.25
+    assert data["container"]["memory_usage_mib"] == 50.0
+    assert data["container"]["memory_limit_mib"] == 200.0
     assert data["loop_duration_ms"] == 123.45
     assert data["dns"]["resolver"]["response_time_ms"] == 8.2
     assert data["dns"]["servers"][0]["server"] == "1.1.1.1"
@@ -350,9 +360,12 @@ def test_history_series_and_values_cover_every_dashboard_check():
             monitor.DnsQueryResult("8.8.8.8", "down", None, error="timeout"),
         ],
         {"status.example.com": successful("status.example.com", 20.0)},
+        monitor.ContainerResources(2.5, 52_428_800, None, None),
     )
 
     assert [item.id for item in series] == [
+        "container-cpu",
+        "container-memory",
         "gateway-1",
         "gateway-2",
         "internet",
@@ -369,6 +382,8 @@ def test_history_series_and_values_cover_every_dashboard_check():
     assert values["dns-server-1"].average is None
     assert values["dns-server-1"].loss == 100
     assert values["important-host-0"].average == 20.0
+    assert values["container-cpu"].average == 2.5
+    assert values["container-memory"].average == 50.0
 
 
 def test_run_dig_extracts_query_time_and_marks_slow_response(monkeypatch):

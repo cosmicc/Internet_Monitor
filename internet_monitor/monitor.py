@@ -24,6 +24,7 @@ import pytz
 import requests
 
 from .history import HistorySeries, HistoryStore, HistoryValue
+from .resources import ContainerResourceMonitor, ContainerResources
 from .settings import (
     ConfigurationError,
     MonitorSettings,
@@ -726,8 +727,15 @@ def configured_internet_targets(
 
 
 def build_history_series(settings: MonitorSettings) -> list[HistorySeries]:
-    """Build stable metadata for every retained ping and DNS series."""
+    """Build stable metadata for every retained resource, ping, and DNS series."""
     series = [
+        HistorySeries("container-cpu", "Container CPU", "cpu", "Internet Monitor"),
+        HistorySeries(
+            "container-memory",
+            "Container Memory",
+            "memory",
+            "Internet Monitor",
+        ),
         HistorySeries("gateway-1", "Gateway 1", "ping", settings.gateway_1_ip),
         HistorySeries("gateway-2", "Gateway 2", "ping", settings.gateway_2_ip),
         HistorySeries("internet", "Active Internet", "ping", "Selected target"),
@@ -790,6 +798,7 @@ def build_history_values(
     resolver_result: ResolverResult,
     dns_results: list[DnsQueryResult],
     important_results: dict[str, PingResult] | None = None,
+    container_resources: ContainerResources | None = None,
 ) -> dict[str, HistoryValue]:
     """Build one aligned history observation from a completed probe cycle."""
     values: dict[str, HistoryValue] = {
@@ -799,6 +808,15 @@ def build_history_values(
             loss=100.0 if resolver_result.state == "down" else 0.0,
         ),
     }
+    if container_resources is not None:
+        values["container-cpu"] = HistoryValue(
+            average=container_resources.cpu_usage_percent,
+            loss=0.0,
+        )
+        values["container-memory"] = HistoryValue(
+            average=container_resources.memory_usage_mib,
+            loss=0.0,
+        )
     for position, host in (
         (1, settings.gateway_1_ip),
         (2, settings.gateway_2_ip),
@@ -855,6 +873,7 @@ def write_status(
     *,
     important_results: dict[str, PingResult] | None = None,
     important_hosts_skipped: bool = False,
+    container_resources: ContainerResources | None = None,
 ) -> None:
     """Atomically write the latest non-persistent dashboard snapshot."""
     internet_targets: list[dict[str, object]] = []
@@ -915,6 +934,11 @@ def write_status(
             "title": diagnosis.title,
             "detail": diagnosis.detail,
         },
+        "container": (
+            container_resources.as_dict()
+            if container_resources is not None
+            else ContainerResources(None, None, None, None).as_dict()
+        ),
         "gateways": gateway_snapshots,
         "internet": {
             "state": internet_state,
@@ -1487,6 +1511,7 @@ def run_monitor(settings: Settings) -> None:
     """Run the monitor loop until interrupted or a required executable is missing."""
     monitor = settings.monitor
     notifier = PushoverNotifier(settings.pushover, monitor.max_alerts_per_hour)
+    resource_monitor = ContainerResourceMonitor()
     history_store = HistoryStore(
         monitor.history_path,
         build_history_series(monitor),
@@ -1737,6 +1762,7 @@ def run_monitor(settings: Settings) -> None:
 
         elapsed = time.monotonic() - loop_started
         snapshot_time = utcnow()
+        container_resources = resource_monitor.sample()
 
         history_store.record(
             snapshot_time,
@@ -1747,6 +1773,7 @@ def run_monitor(settings: Settings) -> None:
                 resolver_result,
                 dns_results,
                 important_results,
+                container_resources,
             ),
             publish_snapshot=storage_status.state != "down",
         )
@@ -1765,6 +1792,7 @@ def run_monitor(settings: Settings) -> None:
                 snapshot_time,
                 important_results=important_results,
                 important_hosts_skipped=probe_cycle.important_hosts_skipped,
+                container_resources=container_resources,
             )
         else:
             LOGGER.debug(

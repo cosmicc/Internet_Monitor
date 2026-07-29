@@ -147,6 +147,26 @@
         return Number.isFinite(value) ? `${Number(value)}%` : "Unavailable";
     }
 
+    function formatContainerCpu(value) {
+        return Number.isFinite(value)
+            ? `${Number(value).toFixed(2)}%`
+            : "Unavailable";
+    }
+
+    function formatContainerMemory(resources) {
+        if (!Number.isFinite(resources?.memory_usage_mib)) {
+            return "Unavailable";
+        }
+        const usage = `${Number(resources.memory_usage_mib).toFixed(2)} MiB`;
+        if (
+            !Number.isFinite(resources.memory_limit_mib)
+            || !Number.isFinite(resources.memory_usage_percent)
+        ) {
+            return usage;
+        }
+        return `${Number(resources.memory_usage_mib).toFixed(2)} / ${Number(resources.memory_limit_mib).toFixed(2)} MiB (${Number(resources.memory_usage_percent).toFixed(2)}%)`;
+    }
+
     function formatMebibytes(value) {
         return Number.isFinite(value)
             ? `${(Number(value) / (1024 * 1024)).toFixed(2)} MiB`
@@ -248,7 +268,9 @@
 
     function updateChartDescription(svg, samples) {
         const chartLabel = svg.dataset.chartLabel || "Latency";
-        const isDnsChart = svg.dataset.chartKind === "dns";
+        const chartKind = svg.dataset.chartKind;
+        const isDnsChart = chartKind === "dns";
+        const isResourceChart = chartKind === "cpu" || chartKind === "memory";
         const failureSampleCount = samples.filter(
             (sample) => sample.lossPercent > 0,
         ).length;
@@ -256,7 +278,15 @@
         let latestDescription = "Latest sample unavailable.";
 
         if (latest) {
-            if (latest.lossPercent >= 100 || latest.latencyMilliseconds === null) {
+            if (isResourceChart) {
+                if (latest.latencyMilliseconds === null) {
+                    latestDescription = "The latest value is unavailable.";
+                } else if (chartKind === "cpu") {
+                    latestDescription = `Latest usage is ${latest.latencyMilliseconds.toFixed(2)} percent.`;
+                } else {
+                    latestDescription = `Latest usage is ${latest.latencyMilliseconds.toFixed(2)} mebibytes.`;
+                }
+            } else if (latest.lossPercent >= 100 || latest.latencyMilliseconds === null) {
                 latestDescription = isDnsChart
                     ? "The latest DNS check failed."
                     : `Latest sample has ${latest.lossPercent}% packet loss and no latency response.`;
@@ -267,12 +297,16 @@
             }
         }
 
-        const failureDescription = failureSampleCount === 0
-            ? (isDnsChart ? "No failed DNS checks are shown." : "No packet loss samples are shown.")
-            : `${failureSampleCount} of ${samples.length} samples show ${isDnsChart ? "a failed DNS check" : "packet loss"} in red.`;
+        const failureDescription = isResourceChart
+            ? ""
+            : (
+                failureSampleCount === 0
+                    ? (isDnsChart ? "No failed DNS checks are shown." : "No packet loss samples are shown.")
+                    : `${failureSampleCount} of ${samples.length} samples show ${isDnsChart ? "a failed DNS check" : "packet loss"} in red.`
+            );
         svg.setAttribute(
             "aria-label",
-            `${chartLabel} over retained container history. ${latestDescription} ${failureDescription}`,
+            `${chartLabel} over retained container history. ${latestDescription} ${failureDescription}`.trim(),
         );
     }
 
@@ -288,19 +322,35 @@
             lossLayer.replaceChildren();
             updateChartDescription(svg, samples);
             if (samples.length === 0) {
+                if (svg.dataset.yAxis === "latency") {
+                    setText("[data-y-axis-maximum]", "— ms");
+                }
                 return;
             }
 
             const viewBox = svg.viewBox.baseVal;
             const width = viewBox.width || 100;
             const height = viewBox.height || 28;
-            const horizontalPadding = width > 100 ? 4 : 1;
+            const horizontalPadding = svg.dataset.yAxis === "latency"
+                ? 42
+                : (width > 100 ? 4 : 1);
             const verticalPadding = height > 50 ? 12 : 3;
             const finiteLatencies = samples
                 .map((sample) => sample.latencyMilliseconds)
                 .filter(Number.isFinite);
             const maximum = Math.max(...finiteLatencies, 1);
             const latencyRange = maximum * 1.15;
+            if (svg.dataset.yAxis === "latency") {
+                const decimals = latencyRange < 10 ? 1 : 0;
+                setText(
+                    "[data-y-axis-maximum]",
+                    `${latencyRange.toFixed(decimals)} ms`,
+                );
+                svg.setAttribute(
+                    "aria-label",
+                    `${svg.getAttribute("aria-label")} The vertical scale runs from 0 to ${latencyRange.toFixed(decimals)} milliseconds.`,
+                );
+            }
             const minimumTimestamp = Number.isFinite(chartStartTimestamp)
                 ? chartStartTimestamp
                 : samples[0].timestamp;
@@ -572,6 +622,31 @@
             applyStatusClass(element, node.status);
             updateBadge(element.querySelector("[data-status-badge]"), node.status);
             if (node.id === "server") {
+                const resources = node.resources || {};
+                setText(
+                    "[data-server-cpu]",
+                    formatContainerCpu(resources.cpu_usage_percent),
+                    element,
+                );
+                setText(
+                    "[data-server-memory]",
+                    formatContainerMemory(resources),
+                    element,
+                );
+                if (recordPoint) {
+                    appendSeriesPoint(
+                        "container-cpu",
+                        timestamp,
+                        resources.cpu_usage_percent,
+                        0,
+                    );
+                    appendSeriesPoint(
+                        "container-memory",
+                        timestamp,
+                        resources.memory_usage_mib,
+                        0,
+                    );
+                }
                 return;
             }
             setText(
