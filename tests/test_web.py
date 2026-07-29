@@ -182,6 +182,12 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b'data-sparkline="container-cpu"' in response.data
     assert b'data-sparkline="container-memory"' in response.data
     assert b'data-y-axis-maximum' in response.data
+    assert b'data-y-axis-two-thirds' in response.data
+    assert b'data-y-axis-one-third' in response.data
+    assert b'data-y-axis-high' in response.data
+    assert b'data-y-axis-low' in response.data
+    assert b'data-y-axis="compact"' in response.data
+    assert b'x1="28" y1="14" x2="100" y2="14"' in response.data
     assert b"red marks loss" in response.data
     assert b"data-loss-series" in response.data
     assert b"Monitoring History" in response.data
@@ -219,6 +225,12 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"localStorage.setItem" in script_response.data
     assert b"Latest usage is" in script_response.data
     assert b"data-y-axis-maximum" in script_response.data
+    assert b"data-y-axis-two-thirds" in script_response.data
+    assert b"data-y-axis-one-third" in script_response.data
+    assert b"data-y-axis-high" in script_response.data
+    assert b"data-y-axis-low" in script_response.data
+    assert b"chartAxisUnit" in script_response.data
+    assert b"updateChartAxis" in script_response.data
 
     api_response = create_app(settings).test_client().get("/api/status")
     assert api_response.status_code == 200

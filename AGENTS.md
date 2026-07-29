@@ -214,8 +214,10 @@ overflow-free order Internet, Gateway Details, DNS Health, then Important Hosts.
 
 The Server topology card shows container CPU and memory values with retained
 sparklines. Keep the small history graphs approximately 75% taller than the
-original 30 px treatment. The large Active-target latency graph shows only two
-small dynamic y-axis labels: its current upper scale in milliseconds and 0 ms.
+original 30 px treatment. Every small history graph shows dark neutral low,
+midpoint, and high guides with dynamic low/high y-axis values in the graph's
+unit. The large Active-target latency graph shows four dynamic y-axis values:
+its current upper scale, two-thirds, one-third, and 0 ms.
 
 The dashboard must provide a complete server-rendered initial view and may poll
 only the same-origin `/api/status` and `/api/history` endpoints. History ranges

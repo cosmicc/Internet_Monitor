@@ -266,6 +266,70 @@
         return element;
     }
 
+    function chartAxisUnit(svg) {
+        if (svg.dataset.chartKind === "cpu") {
+            return "%";
+        }
+        if (svg.dataset.chartKind === "memory") {
+            return " MiB";
+        }
+        return " ms";
+    }
+
+    function formatChartAxisValue(value, maximum, unit) {
+        const decimals = maximum < 10 ? 1 : 0;
+        return `${value.toFixed(decimals)}${unit}`;
+    }
+
+    function updateChartAxis(svg, maximum) {
+        const unit = chartAxisUnit(svg);
+        const maximumLabel = formatChartAxisValue(maximum, maximum, unit);
+
+        if (svg.dataset.yAxis === "compact") {
+            const wrapper = svg.closest("[data-compact-chart]");
+            if (wrapper) {
+                setText("[data-y-axis-high]", maximumLabel, wrapper);
+                setText(
+                    "[data-y-axis-low]",
+                    formatChartAxisValue(0, maximum, unit),
+                    wrapper,
+                );
+            }
+        } else if (svg.dataset.yAxis === "latency") {
+            setText("[data-y-axis-maximum]", maximumLabel);
+            setText(
+                "[data-y-axis-two-thirds]",
+                formatChartAxisValue(maximum * (2 / 3), maximum, unit),
+            );
+            setText(
+                "[data-y-axis-one-third]",
+                formatChartAxisValue(maximum / 3, maximum, unit),
+            );
+        }
+
+        if (svg.dataset.yAxis) {
+            svg.setAttribute(
+                "aria-label",
+                `${svg.getAttribute("aria-label")} The vertical scale runs from 0 to ${maximumLabel}.`,
+            );
+        }
+    }
+
+    function resetChartAxis(svg) {
+        if (svg.dataset.yAxis === "compact") {
+            const wrapper = svg.closest("[data-compact-chart]");
+            const unit = chartAxisUnit(svg);
+            if (wrapper) {
+                setText("[data-y-axis-high]", `—${unit}`, wrapper);
+                setText("[data-y-axis-low]", `0${unit}`, wrapper);
+            }
+        } else if (svg.dataset.yAxis === "latency") {
+            setText("[data-y-axis-maximum]", "— ms");
+            setText("[data-y-axis-two-thirds]", "— ms");
+            setText("[data-y-axis-one-third]", "— ms");
+        }
+    }
+
     function updateChartDescription(svg, samples) {
         const chartLabel = svg.dataset.chartLabel || "Latency";
         const chartKind = svg.dataset.chartKind;
@@ -322,16 +386,17 @@
             lossLayer.replaceChildren();
             updateChartDescription(svg, samples);
             if (samples.length === 0) {
-                if (svg.dataset.yAxis === "latency") {
-                    setText("[data-y-axis-maximum]", "— ms");
-                }
+                resetChartAxis(svg);
                 return;
             }
 
             const viewBox = svg.viewBox.baseVal;
             const width = viewBox.width || 100;
             const height = viewBox.height || 28;
-            const horizontalPadding = svg.dataset.yAxis === "latency"
+            const horizontalStartPadding = svg.dataset.yAxis === "latency"
+                ? 42
+                : (svg.dataset.yAxis === "compact" ? 28 : (width > 100 ? 4 : 1));
+            const horizontalEndPadding = svg.dataset.yAxis === "latency"
                 ? 42
                 : (width > 100 ? 4 : 1);
             const verticalPadding = height > 50 ? 12 : 3;
@@ -340,17 +405,7 @@
                 .filter(Number.isFinite);
             const maximum = Math.max(...finiteLatencies, 1);
             const latencyRange = maximum * 1.15;
-            if (svg.dataset.yAxis === "latency") {
-                const decimals = latencyRange < 10 ? 1 : 0;
-                setText(
-                    "[data-y-axis-maximum]",
-                    `${latencyRange.toFixed(decimals)} ms`,
-                );
-                svg.setAttribute(
-                    "aria-label",
-                    `${svg.getAttribute("aria-label")} The vertical scale runs from 0 to ${latencyRange.toFixed(decimals)} milliseconds.`,
-                );
-            }
+            updateChartAxis(svg, latencyRange);
             const minimumTimestamp = Number.isFinite(chartStartTimestamp)
                 ? chartStartTimestamp
                 : samples[0].timestamp;
@@ -360,10 +415,14 @@
             const timestampRange = Math.max(maximumTimestamp - minimumTimestamp, 1);
             const coordinates = samples.map((sample) => {
                 const x = samples.length === 1
-                    ? width - horizontalPadding
-                    : horizontalPadding + (
+                    ? width - horizontalEndPadding
+                    : horizontalStartPadding + (
                         (sample.timestamp - minimumTimestamp)
-                        * (width - horizontalPadding * 2)
+                        * (
+                            width
+                            - horizontalStartPadding
+                            - horizontalEndPadding
+                        )
                     ) / timestampRange;
                 if (!Number.isFinite(sample.latencyMilliseconds)) {
                     return {x, y: null};

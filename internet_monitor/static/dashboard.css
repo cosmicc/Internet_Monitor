@@ -608,6 +608,42 @@ h3 {
     overflow: visible;
 }
 
+.compact-chart-wrap {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+.compact-chart-y-marker {
+    position: absolute;
+    left: 1px;
+    z-index: 1;
+    max-width: 27%;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.48rem;
+    line-height: 1;
+    pointer-events: none;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+
+.compact-chart-y-marker-upper {
+    top: 10.7%;
+    transform: translateY(-50%);
+}
+
+.compact-chart-y-marker-lower {
+    top: 89.3%;
+    transform: translateY(-50%);
+}
+
+.compact-chart-wrap [data-grid-line] {
+    stroke: var(--border);
+    stroke-dasharray: 2 3;
+    vector-effect: non-scaling-stroke;
+}
+
 .sparkline .chart-segment,
 .table-sparkline .chart-segment,
 .important-sparkline .chart-segment,
@@ -805,6 +841,15 @@ h3 {
     height: 49px;
 }
 
+.compact-chart-wrap-table {
+    width: 104px;
+    min-width: 82px;
+}
+
+.compact-chart-wrap > .table-sparkline {
+    width: 100%;
+}
+
 .summary-metrics,
 .dns-summary {
     display: grid;
@@ -902,11 +947,23 @@ h3 {
 }
 
 .chart-y-marker-upper {
-    top: 4%;
+    top: 7.1%;
+    transform: translateY(-50%);
+}
+
+.chart-y-marker-upper-middle {
+    top: 35.9%;
+    transform: translateY(-50%);
+}
+
+.chart-y-marker-lower-middle {
+    top: 64.1%;
+    transform: translateY(-50%);
 }
 
 .chart-y-marker-lower {
-    bottom: 4%;
+    top: 92.9%;
+    transform: translateY(-50%);
 }
 
 .session-chart [data-grid-line] {
@@ -1308,6 +1365,11 @@ h3 {
         width: 100%;
         min-width: 0;
         height: 59.5px;
+    }
+
+    .compact-chart-wrap-table {
+        width: 100%;
+        min-width: 0;
     }
 
     .summary-metrics,

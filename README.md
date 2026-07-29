@@ -17,7 +17,9 @@ health checks.
 - Diagnoses local gateway, upstream gateway, ISP/Internet, and DNS problems.
 - Displays a live Server → Gateway 1 → Gateway 2 → Internet topology, detailed
   ping statistics, and 30 days of shared ping/DNS history that marks packet loss
-  and failed DNS checks in red.
+  and failed DNS checks in red. Small graphs show low, midpoint, and high scale
+  guides with low/high values; the large latency graph includes intermediate
+  millisecond values.
 - Shows container-scoped CPU and memory usage with the same ephemeral retained
   history, without requiring host mounts or Docker socket access.
 - Sends independent Pushover alerts for gateways, DNS servers, and important

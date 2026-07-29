@@ -8,11 +8,17 @@
   Server topology card.
 - Added two compact millisecond y-axis labels to the large Active-target latency
   graph so its dynamic vertical scale is visible.
+- Added low, midpoint, and high grid lines plus dynamic low/high y-axis values
+  to every compact history graph.
+- Added one-third and two-thirds millisecond values to the large Active-target
+  latency graph.
 
 ### Changed
 
 - Increased all compact history graph heights by approximately 75% for easier
   trend reading on desktop and mobile.
+- Changed compact CPU, memory, ping, and DNS graphs to reserve a consistent
+  y-axis label area while preserving their taller graph treatment.
 - Changed active application, package, image, and release versioning to the
   two-level format beginning with 0.3 while preserving historical versions.
 - Extended the existing ephemeral 1-hour, 6-hour, 24-hour, and 30-day history
@@ -22,6 +28,8 @@
 
 - Fixed ambiguity in the large latency graph by showing its current upper scale
   and zero baseline instead of leaving the vertical range unlabeled.
+- Aligned the large latency graph's four horizontal guides with its plotted
+  maximum, two-thirds, one-third, and zero values.
 - Fixed compact Gateway Details headings so long status badges no longer crowd
   gateway names at wide desktop layouts.
 - Kept memory percentages unavailable when Docker has no finite cgroup memory
