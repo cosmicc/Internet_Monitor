@@ -185,6 +185,7 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b'data-y-axis-two-thirds' in response.data
     assert b'data-y-axis-one-third' in response.data
     assert b'data-y-axis-high' in response.data
+    assert b'data-y-axis-mid' in response.data
     assert b'data-y-axis-low' in response.data
     assert b'data-y-axis="compact"' in response.data
     assert b'x1="28" y1="14" x2="100" y2="14"' in response.data
@@ -228,6 +229,7 @@ def test_index_renders_current_status_and_per_server_timings(tmp_path: Path):
     assert b"data-y-axis-two-thirds" in script_response.data
     assert b"data-y-axis-one-third" in script_response.data
     assert b"data-y-axis-high" in script_response.data
+    assert b"data-y-axis-mid" in script_response.data
     assert b"data-y-axis-low" in script_response.data
     assert b"chartAxisUnit" in script_response.data
     assert b"updateChartAxis" in script_response.data

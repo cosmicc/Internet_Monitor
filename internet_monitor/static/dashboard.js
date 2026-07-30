@@ -290,6 +290,11 @@
             if (wrapper) {
                 setText("[data-y-axis-high]", maximumLabel, wrapper);
                 setText(
+                    "[data-y-axis-mid]",
+                    formatChartAxisValue(maximum / 2, maximum, unit),
+                    wrapper,
+                );
+                setText(
                     "[data-y-axis-low]",
                     formatChartAxisValue(0, maximum, unit),
                     wrapper,
@@ -321,6 +326,7 @@
             const unit = chartAxisUnit(svg);
             if (wrapper) {
                 setText("[data-y-axis-high]", `—${unit}`, wrapper);
+                setText("[data-y-axis-mid]", `—${unit}`, wrapper);
                 setText("[data-y-axis-low]", `0${unit}`, wrapper);
             }
         } else if (svg.dataset.yAxis === "latency") {

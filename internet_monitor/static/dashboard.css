@@ -621,7 +621,7 @@ h3 {
     max-width: 27%;
     overflow: hidden;
     color: var(--muted);
-    font-size: 0.48rem;
+    font-size: 0.56rem;
     line-height: 1;
     pointer-events: none;
     text-overflow: clip;
@@ -630,6 +630,11 @@ h3 {
 
 .compact-chart-y-marker-upper {
     top: 10.7%;
+    transform: translateY(-50%);
+}
+
+.compact-chart-y-marker-middle {
+    top: 50%;
     transform: translateY(-50%);
 }
 

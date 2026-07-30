@@ -133,7 +133,7 @@ def test_version_surfaces_match_release_version():
     """Package, image defaults, metadata, and changelog should align."""
     pyproject = tomllib.loads(_text("pyproject.toml"))
 
-    assert __version__ == "0.3"
+    assert __version__ == "1.0"
     assert _text("VERSION").strip() == __version__
     assert pyproject["project"]["version"] == __version__
     assert pyproject["project"]["readme"] == "README.md"

@@ -215,7 +215,7 @@ overflow-free order Internet, Gateway Details, DNS Health, then Important Hosts.
 The Server topology card shows container CPU and memory values with retained
 sparklines. Keep the small history graphs approximately 75% taller than the
 original 30 px treatment. Every small history graph shows dark neutral low,
-midpoint, and high guides with dynamic low/high y-axis values in the graph's
+midpoint, and high guides with matching dynamic y-axis values in the graph's
 unit. The large Active-target latency graph shows four dynamic y-axis values:
 its current upper scale, two-thirds, one-third, and 0 ms.
 

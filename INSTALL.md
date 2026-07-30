@@ -4,7 +4,7 @@ Internet Monitor supports local Docker Compose, Portainer, and Docker Swarm.
 Configuration values come from `.env.example`; do not commit a populated `.env`
 file because it may contain Pushover credentials.
 
-The default Swarm deployment pulls the versioned 0.3 image from GHCR. For
+The default Swarm deployment pulls the versioned 1.0 image from GHCR. For
 testing source changes that have not been released, use Docker Compose or
 override `IMAGE` with an image published under a test tag.
 
@@ -101,7 +101,7 @@ in a 16 MiB tmpfs.
 ## Docker Swarm
 
 Swarm cannot build the image in the stack definition. By default,
-`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:0.3`. Override
+`docker-stack.yml` pulls `ghcr.io/cosmicc/internet-monitor:1.0`. Override
 `IMAGE` when testing another registry tag.
 
 From a Swarm manager, label the node that should normally run Internet Monitor:
@@ -234,7 +234,7 @@ survive a restart.
 ## Release Image Publishing
 
 Publishing a GitHub Release triggers `.github/workflows/publish-release-image.yml`.
-The workflow requires the release tag, such as `v0.3`, to match the package
+The workflow requires the release tag, such as `v1.0`, to match the package
 version. It runs tests, validates Compose and Swarm definitions, and then
 publishes `linux/amd64` and `linux/arm64` images to GHCR. Stable releases also
 update the `latest` tag.
@@ -288,6 +288,13 @@ or DNS failure, weighted average latency, and minimum/maximum latency in each
 displayed interval. `HISTORY_MAX_POINTS` limits response and
 browser chart size. Keep `HISTORY_PATH` on the container tmpfs;
 pointing it at persistent storage changes the approved storage model.
+
+### Upgrading From 0.3 To 1.0
+
+Redeploy the service with the `1.0` image. No environment-variable, storage, or
+data migration is required. The dashboard now shows larger y-axis values plus a
+dynamic midpoint value on every compact history graph. As with every redeploy,
+the container restart intentionally begins a fresh ephemeral history window.
 
 ### Upgrading From 0.2.2 To 0.3
 

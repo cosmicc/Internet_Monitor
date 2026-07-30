@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0 - 07.29.2026
+
+### Added
+
+- Added a dynamic midpoint y-axis value to every compact CPU, memory, ping, and
+  DNS history graph.
+
+### Changed
+
+- Increased compact graph y-axis label text to nearly match the large graph
+  while preserving every graph and card dimension.
+
+### Fixed
+
+- Fixed compact midpoint guides lacking a matching numeric value, making each
+  graph's full dynamic scale readable at a glance.
+
 ## 0.3 - 07.29.2026
 
 ### Added

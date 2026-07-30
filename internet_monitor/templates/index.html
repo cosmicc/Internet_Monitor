@@ -12,6 +12,7 @@
 {% macro history_sparkline(series_id, label, kind="ping", css_class="table-sparkline") -%}
 <div class="compact-chart-wrap{% if 'table-sparkline' in css_class %} compact-chart-wrap-table{% endif %}" data-compact-chart>
     <span class="compact-chart-y-marker compact-chart-y-marker-upper tabular" data-y-axis-high>—</span>
+    <span class="compact-chart-y-marker compact-chart-y-marker-middle tabular" data-y-axis-mid>—</span>
     <span class="compact-chart-y-marker compact-chart-y-marker-lower tabular" data-y-axis-low>0</span>
     <svg class="{{ css_class }}" data-sparkline="{{ series_id }}" data-chart-label="{{ label }}" data-chart-kind="{{ kind }}" data-y-axis="compact" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="{{ label }} history; no samples recorded yet">
         <line data-grid-line x1="28" y1="3" x2="100" y2="3"></line>
